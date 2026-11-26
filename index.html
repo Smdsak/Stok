@@ -1428,7 +1428,7 @@ function tutTitle(sn){
 }
 /* tutanak metni: kaynak docx şablonlarındaki cümle yapısı */
 function tutHtml(sn){
-  var st=sn.set,e=esc,p=[],sig=[],ek='',yil=(String(st.ihale||'').match(/\d{4}/)||[''])[0],kgS=(sn.kg==null||isNaN(sn.kg))?'…………':fmt(sn.kg),dS=sn.kd?dtr(sn.kd):'…………';
+  var st=sn.set,e=esc,p=[],sig=[],ek='',tbl='',yil=(String(st.ihale||'').match(/\d{4}/)||[''])[0],kgS=(sn.kg==null||isNaN(sn.kg))?'…………':fmt(sn.kg),dS=sn.kd?dtr(sn.kd):'…………';
   if(sn.prod==='gaz'){
     var adet=sn.n+' ('+tutNum(sn.n)+') adet '+e(st.tank)+' kg’lık klor tankları';
     var tblNot=sn.tubes?' Tanklara ait seri numaraları ve tartılan kiloları aşağıdaki tabloda belirtilmiştir.':'',tbl=sn.tubes?tutTubeHtml(sn):'';
@@ -1460,7 +1460,7 @@ function sheetTutView(s){
   var pg=new DOMParser().parseFromString(s.html,'text/html').querySelector('.page');
   var body=pg?pg.outerHTML:'<p>Tutanak hazırlanamadı.</p>';
   return sheetFrame(s.title||'Tutanak','<div class="tutprev tutdoc" id="tutprev">'+body+'</div>'+
-    '<p class="note-s" style="margin:8px 0 0">Yazdırmak için “Yazdır”a basın. Yazdır çalışmazsa uygulamayı Safari\'de açıp tekrar deneyin.</p>'+
+    '<p class="note-s" style="margin:8px 0 0">iPhone\'da “Yazdır”a basınca tutanak PDF olarak hazırlanır; açılan paylaşım ekranından “Yazdır”ı seçin.</p>'+
     '<div class="acts"><button type="button" class="btn" data-a="close">Kapat</button><button type="button" class="btn pri" data-a="tutpdf">Yazdır</button></div>');
 }
 /* yazdırma stili: yalnız .tutdoc ve #tutprint kapsamında; ekranda yazdırma kopyası gizli kalır */
@@ -1483,18 +1483,102 @@ function tutCss(){
   if(document.getElementById('tutcss'))return;
   var st=document.createElement('style');st.id='tutcss';st.textContent=TUT_PRINT_CSS;document.head.appendChild(st);
 }
-/* Yazdır: sayfadaki tutanağın yazdırma kopyası gövdeye eklenir, yalnız o basılır */
+/* ---- Yazdırma ----
+   iOS ana ekran uygulamasında window.print çalışmaz. iOS'ta tutanak PDF olarak hazırlanır ve
+   paylaşım sayfası açılır; oradan "Yazdır" seçilir. Diğer tarayıcılarda tarayıcının yazdırma penceresi açılır. */
+var TP={W:1240,H:1754,M:150};
+function tpClear(x){x.fillStyle='#fff';x.fillRect(0,0,TP.W,TP.H);x.fillStyle='#000';x.strokeStyle='#000';x.lineWidth=2;x.textBaseline='top'}
+function tpGo(){var c=document.createElement('canvas');c.width=TP.W;c.height=TP.H;var x=c.getContext('2d');tpClear(x);return {c:c,x:x,y:TP.M,pages:[]}}
+function tpBreak(g,h){if(g.y+h>TP.H-TP.M){g.pages.push(g.c.toDataURL('image/jpeg',0.92));tpClear(g.x);g.y=TP.M}}
+function tpWrap(x,text,font,maxW){x.font=font;var words=String(text).replace(/\s+/g,' ').trim().split(' '),out=[],cur='';
+  words.forEach(function(w){var t=cur?cur+' '+w:w;if(cur&&x.measureText(t).width>maxW){out.push(cur);cur=w}else cur=t});
+  out.push(cur);return out}
+function tpPara(g,text,o){
+  var font=(o.bold?'bold ':'')+o.size+'px Arial, Helvetica, sans-serif',lh=Math.round(o.size*1.5),ind=o.indent||0;
+  var lines=tpWrap(g.x,text,font,TP.W-2*TP.M-ind);g.x.font=font;
+  lines.forEach(function(ln,i){tpBreak(g,lh);var w=g.x.measureText(ln).width,xx=TP.M+(i===0?ind:0);
+    if(o.align==='center')xx=(TP.W-w)/2;else if(o.align==='right')xx=TP.W-TP.M-w;
+    g.x.fillText(ln,xx,g.y);g.y+=lh});
+  g.y+=(o.after||0)}
+function tpTable(g,t){
+  var rows=Array.prototype.map.call(t.rows,function(r){return Array.prototype.map.call(r.cells,function(c){return {text:c.textContent.replace(/\s+/g,' ').trim(),bold:c.tagName==='TH'||!!c.querySelector('b'),span:c.colSpan||1}})});
+  var cols=Math.max.apply(null,rows.map(function(r){return r.reduce(function(a,c){return a+c.span},0)})),cw=(TP.W-2*TP.M)/cols,size=24,h=size+22;
+  rows.forEach(function(r){tpBreak(g,h);var col=0;
+    r.forEach(function(c){var w=cw*c.span,x0=TP.M+col*cw;g.x.strokeRect(x0,g.y,w,h);
+      g.x.font=(c.bold?'bold ':'')+size+'px Arial, Helvetica, sans-serif';var tw=g.x.measureText(c.text).width;
+      g.x.fillText(c.text,x0+(w-tw)/2,g.y+11);col+=c.span});
+    g.y+=h});
+  g.y+=24}
+function tpSig(g,t){
+  var cw=(TP.W-2*TP.M)/2;
+  Array.prototype.forEach.call(t.rows,function(r){
+    var cells=Array.prototype.slice.call(r.cells),items=cells.map(function(c){return Array.prototype.slice.call(c.querySelectorAll('b,div.fl'))});
+    var n=Math.max.apply(null,items.map(function(a){return a.length})),rowH=n*48+30;
+    tpBreak(g,rowH);
+    items.forEach(function(list,ci){var x0=TP.M+ci*cw,y=g.y;
+      list.forEach(function(el){
+        if(el.tagName==='B'){g.x.font='bold 26px Arial, Helvetica, sans-serif';g.x.fillText(el.textContent.trim(),x0,y)}
+        else{var label=el.textContent.replace(/\s+/g,' ').trim();g.x.font='24px Arial, Helvetica, sans-serif';g.x.fillText(label,x0,y);
+          var lw=g.x.measureText(label).width;g.x.fillRect(x0+lw+10,y+30,cw*0.55-lw-10,2)}
+        y+=48})});
+    g.y+=rowH});
+  g.y+=30}
+function tpRender(html){
+  var root=new DOMParser().parseFromString(html,'text/html').querySelector('.page'),g=tpGo();
+  if(!root)return g;
+  Array.prototype.forEach.call(root.children,function(el){
+    var tag=el.tagName,cls=el.className||'';
+    if(tag==='H1')tpPara(g,el.textContent,{size:38,bold:true,align:'center',after:50});
+    else if(cls==='evrak')tpPara(g,el.textContent,{size:24,align:'right',after:24});
+    else if(tag==='P')tpPara(g,el.textContent,{size:26,indent:74,after:26});
+    else if(tag==='TABLE'&&cls==='tub')tpTable(g,el);
+    else if(tag==='TABLE'&&cls==='sig')tpSig(g,el);
+    else if(cls==='ek'){Array.prototype.forEach.call(el.children,function(p){tpPara(g,p.textContent,{size:24,after:6})});g.y+=20}
+  });
+  g.pages.push(g.c.toDataURL('image/jpeg',0.92));
+  return g}
+function tpPdf(pages){
+  var enc=new TextEncoder(),parts=[],off=0,xref=[],n=pages.length,size=3+3*n;
+  function add(s){var b=typeof s==='string'?enc.encode(s):s;parts.push(b);off+=b.length}
+  function obj(num,body){xref[num]=off;add(num+' 0 obj\n');add(body);add('\nendobj\n')}
+  add('%PDF-1.4\n');
+  obj(1,'<< /Type /Catalog /Pages 2 0 R >>');
+  var kids=[];for(var i=0;i<n;i++)kids.push((3+3*i)+' 0 R');
+  obj(2,'<< /Type /Pages /Kids ['+kids.join(' ')+'] /Count '+n+' >>');
+  for(var k=0;k<n;k++){
+    var pg=3+3*k,ct=4+3*k,im=5+3*k,cs='q 595.28 0 0 841.89 0 0 cm /Im'+k+' Do Q';
+    obj(pg,'<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595.28 841.89] /Resources << /XObject << /Im'+k+' '+im+' 0 R >> >> /Contents '+ct+' 0 R >>');
+    obj(ct,'<< /Length '+cs.length+' >>\nstream\n'+cs+'\nendstream');
+    var bin=atob(pages[k].split(',')[1]),bytes=new Uint8Array(bin.length);for(var q=0;q<bin.length;q++)bytes[q]=bin.charCodeAt(q);
+    xref[im]=off;add(im+' 0 obj\n<< /Type /XObject /Subtype /Image /Width '+TP.W+' /Height '+TP.H+' /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length '+bytes.length+' >>\nstream\n');
+    add(bytes);add('\nendstream\nendobj\n')}
+  var xo=off,x='xref\n0 '+size+'\n0000000000 65535 f \n';
+  for(var j=1;j<size;j++)x+=('0000000000'+xref[j]).slice(-10)+' 00000 n \n';
+  add(x);add('trailer\n<< /Size '+size+' /Root 1 0 R >>\nstartxref\n'+xo+'\n%%EOF\n');
+  var out=new Uint8Array(off),p=0;parts.forEach(function(b){out.set(b,p);p+=b.length});
+  return new Blob([out],{type:'application/pdf'})}
+function tutPdfBlob(s){return tpPdf(tpRender(s.html).pages)}
+function tutFileName(s){return String(s.title||'Tutanak').replace(/[\/\\:*?"<>|]+/g,'-').trim()+'.pdf'}
 function tutPrint(){
   var s=U.sheet;if(!s||s.kind!=='tutview')return;
-  tutCss();
-  var pg=new DOMParser().parseFromString(s.html,'text/html').querySelector('.page');
-  if(!pg){toast('Tutanak hazırlanamadı');return}
-  var host=document.getElementById('tutprint');
-  if(!host){host=document.createElement('div');host.id='tutprint';host.className='tutdoc';document.body.appendChild(host)}
-  host.innerHTML=pg.outerHTML;
-  try{window.print()}
-  catch(e){toast('Yazdırma açılamadı. Uygulamayı Safari\'de açıp tekrar deneyin.')}
-}
+  var ios=/iPad|iPhone|iPod/.test(navigator.userAgent)||(navigator.platform==='MacIntel'&&navigator.maxTouchPoints>1);
+  if(!ios){
+    tutCss();
+    var pg=new DOMParser().parseFromString(s.html,'text/html').querySelector('.page');
+    if(!pg){toast('Tutanak hazırlanamadı');return}
+    var host=document.getElementById('tutprint');
+    if(!host){host=document.createElement('div');host.id='tutprint';host.className='tutdoc';document.body.appendChild(host)}
+    host.innerHTML=pg.outerHTML;
+    try{window.print()}catch(e){toast('Yazdırma açılamadı.')}
+    return}
+  /* iOS: PDF hazırlanır, paylaşım sayfası açılır (kullanıcı dokunuşu içinde, hemen) */
+  var f;
+  try{f=new File([tutPdfBlob(s)],tutFileName(s),{type:'application/pdf'})}catch(e){toast('PDF hazırlanamadı');return}
+  if(navigator.canShare&&navigator.canShare({files:[f]})){
+    navigator.share({files:[f],title:f.name}).catch(function(e){if(!e||e.name!=='AbortError')toast('Paylaşım açılamadı. Uygulamayı Safari\'de açıp tekrar deneyin.')});
+    return}
+  var w=window.open(URL.createObjectURL(f),'_blank');
+  if(!w)toast('PDF açılamadı. Uygulamayı Safari\'de açıp tekrar deneyin.')}
 function tutPrintFor(kind,id){
   var rec=tutRecOf(kind,id);if(!rec){toast('Kayıt bulunamadı');return}
   tutView(kind==='ship'?tutShipSnapFresh(rec):tutMoveSnapFresh(rec),U.sheet);
@@ -2962,7 +3046,7 @@ function renderSheet(first){
 function closeSheet(){var s=U.sheet;if(s&&(s.kind==='dv'||s.kind==='tutview')&&s.back){U.sheet=s.back;renderSheet();return}U.sheet=null;renderSheet()}
 function err(msg){if(U.sheet)U.sheet.err=msg;var el=$('#f-err');if(el)el.textContent=msg}
 var toastT=null;
-var APP_VER='2026-11-25.17';
+var APP_VER='2026-11-26.18';
 var UNDO=null;
 function selbar(){
   try{
@@ -3495,7 +3579,7 @@ else{
     });
   });
 }
-if(typeof window!=='undefined'&&window.__TEST__)window.__TEST__.api={CLOUD:CLOUD,tutDir:tutDir,tutArchiveOf:tutArchiveOf,tutProdName:tutProdName,parseNum:parseNum,tombAdd:tombAdd,mergeData:mergeData,tutMoveSnapFresh:tutMoveSnapFresh,tutTubeHtml:tutTubeHtml,tutFormInit:tutFormInit,U:U,S:function(){return S},render:render,renderSheet:renderSheet,openMove:openMove,openShip:openShip,openProduct:openProduct,openLoc:openLoc,validate:validate,ACT:ACT,buildCsv:buildCsv,netMap:netMap,saveMove:saveMove,saveShip:saveShip};
+if(typeof window!=='undefined'&&window.__TEST__)window.__TEST__.api={tutHtml:tutHtml,tutPdfBlob:tutPdfBlob,CLOUD:CLOUD,tutDir:tutDir,tutArchiveOf:tutArchiveOf,tutProdName:tutProdName,parseNum:parseNum,tombAdd:tombAdd,mergeData:mergeData,tutMoveSnapFresh:tutMoveSnapFresh,tutTubeHtml:tutTubeHtml,tutFormInit:tutFormInit,U:U,S:function(){return S},render:render,renderSheet:renderSheet,openMove:openMove,openShip:openShip,openProduct:openProduct,openLoc:openLoc,validate:validate,ACT:ACT,buildCsv:buildCsv,netMap:netMap,saveMove:saveMove,saveShip:saveShip};
 })();
 </script>
 
