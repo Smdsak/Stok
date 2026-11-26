@@ -585,6 +585,15 @@ select{appearance:none;-webkit-appearance:none;padding-right:42px;background-ima
 .throw{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:10px 0;border-top:1px solid var(--line)}
 .throw label{font-size:14.5px;font-weight:600;min-width:0}.throw label small{display:block;font-weight:400;color:var(--muted);font-size:12.5px;margin-top:2px}
 .thin{display:flex;align-items:center;gap:6px;flex:none}.thin input{width:76px;text-align:right;padding:9px 10px;border:1px solid var(--line);border-radius:10px;background:var(--bg);color:var(--fg);font:inherit;font-variant-numeric:tabular-nums}.thin span{color:var(--muted);font-size:13px}
+.pn-sum .pn-tile em{font-style:normal;color:var(--muted,#64748b);font-size:12.5px}
+.pn-grp{margin:10px 0 4px}.pn-grp>small{display:block;margin-bottom:6px;font-weight:600}
+.pn-chips{display:flex;flex-wrap:wrap;gap:6px}
+.qrow2{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:12px 0;border-top:1px solid rgba(127,127,127,.25)}
+.qrow2 .qt small{display:block;color:var(--muted,#64748b);font-size:13px;margin-top:2px}
+.qbtns{display:flex;gap:8px;flex-shrink:0}
+.qb{border:1px solid rgba(127,127,127,.4);background:transparent;color:inherit;border-radius:999px;padding:8px 12px;font:inherit;font-size:13.5px;min-height:40px}
+.qb.pri{background:#0e7490;border-color:transparent;color:#fff}
+.cfx{padding:10px 0;border-top:1px solid rgba(127,127,127,.25)}.cfx>b{display:block;margin-bottom:6px}
 .cchip{display:inline-block;margin-top:3px;border:0;border-radius:6px;padding:2px 8px;font:600 11.5px var(--f-body);background:var(--surface2);color:var(--muted)}
 .cchip.ok{background:var(--alim-soft);color:var(--alim)}.cchip.warn{background:var(--kul-soft);color:var(--kul)}.cchip.bad{background:var(--danger-soft);color:var(--danger)}
 </style>
@@ -1381,11 +1390,13 @@ function tutTeslimSave(mode){
     if(kChanged)return err('Bu kayıt tamamlanmış. Tartım, ambalaj ya da miktar değişikliğini stoğa yansıtmak için Kaydet\'e basın.');
   }
   var mv=prevM?Object.assign({},prevM):{id:F.id||uid(),ts:F.ts||Date.now(),type:'alim',productId:p.id,from:null,to:S.locations[0].id};
+  var edBefore=prevM&&!prevM.draft?JSON.stringify([prevM.date,prevM.note||'',prevM.qty,prevM.kantar||null,prevM.irs||null,prevM.tutInfo?JSON.stringify(prevM.tutInfo):'']):null;
   mv.date=F.date;mv.note=str(F.note);mv.qty=qty;mv.draft=mode==='done'?false:(prevM?!!prevM.draft:true);
   if(F.evrakManual&&F.evrak)mv.evrak=F.evrak;else delete mv.evrak;
   if(kant)mv.kantar=kant;else delete mv.kantar;
   if(irs)mv.irs=irs;else delete mv.irs;
   mv.tutInfo=inf;
+  if(edBefore!==null&&edBefore!==JSON.stringify([mv.date,mv.note||'',mv.qty,mv.kantar||null,mv.irs||null,prevM&&prevM.tutInfo?JSON.stringify(mv.tutInfo):'']))mv.eds=(prevM.eds||[]).concat([Date.now()]);
   var sn=null;
   if(mode==='print'){
     sn=tutSnapFor(mv,p,kant,inf);
@@ -1919,7 +1930,7 @@ function chip(a,k,label,on){return '<button type="button" class="chip" data-a="'
 function mRow(m,withDate,ro,showProd){
   var sm=U.sm&&!ro&&U.tab==='hareket'&&U.mod!=='all'&&U.mod!=='gaz';
   var p=P(m.productId)||{unit:'',multi:true};var t=T[m.type];var route='';
-  if(m.draft)return '<button type="button" class="row t-alim" data-a="edit" data-id="'+m.id+'"><span class="badge">'+ic('alim')+'</span><span class="rt"><b>Yarım kalan alım'+(showProd?' · '+esc(p.name||''):'')+'</b><small>'+esc((withDate?dshort(m.date)+' · ':'')+'Kantar ve belgeler bekleniyor'+(m.note?' · '+m.note:''))+'</small></span><span class="rq"><b>—</b></span></button>';
+  if(m.draft)return '<button type="button" class="row t-alim" data-a="minfo" data-id="'+m.id+'"><span class="badge">'+ic('alim')+'</span><span class="rt"><b>Yarım kalan alım'+(showProd?' · '+esc(p.name||''):'')+'</b><small>'+esc((withDate?dshort(m.date)+' · ':'')+'Kantar ve belgeler bekleniyor'+(m.note?' · '+m.note:''))+'</small></span><span class="rq"><b>—</b></span></button>';
   if(m.type==='alim')route=p.multi?'Giriş: '+lname(m.to):'Stoğa eklendi';
   else if(m.type==='kullanim')route=p.multi?lname(m.from):'Stoktan düştü';
   else if(m.type==='transfer')route=lname(m.from)+' → '+lname(m.to);
@@ -1927,7 +1938,7 @@ function mRow(m,withDate,ro,showProd){
   if(m.note)route+=' · '+m.note;
   if(withDate)route=dshort(m.date)+' · '+route;
   var sign=m.type==='alim'||(m.type==='duzeltme'&&m.to)?'+':m.type==='transfer'?'':'−';
-  return '<button type="button" class="row t-'+m.type+(sm?' sel':'')+'" data-a="'+(sm?'selt':ro?'minfo':'edit')+'" data-id="'+m.id+'"'+(sm?' aria-pressed="'+(!!U.sel[m.id])+'"':'')+'>'+(sm?'<span class="chk">✓</span>':'')+'<span class="badge">'+ic(m.type)+'</span><span class="rt"><b>'+t.n+(showProd?' · '+esc(p.name||''):'')+'</b><small>'+esc(route)+(m.docs&&m.docs.length?'<span class="clipc">'+ic('clip',12)+m.docs.length+'</span>':'')+'</small></span><span class="rq"><b>'+sign+fmt(m.qty)+'</b><small>'+esc(p.unit)+'</small>'+(p.kg>0?'<small>'+fmt(kgOf(p,m.qty))+' kg</small>':'')+'</span></button>';
+  return '<button type="button" class="row t-'+m.type+(sm?' sel':'')+'" data-a="'+(sm?'selt':'minfo')+'" data-id="'+m.id+'"'+(sm?' aria-pressed="'+(!!U.sel[m.id])+'"':'')+'>'+(sm?'<span class="chk">✓</span>':'')+'<span class="badge">'+ic(m.type)+'</span><span class="rt"><b>'+t.n+(showProd?' · '+esc(p.name||''):'')+'</b><small>'+esc(route)+(m.docs&&m.docs.length?'<span class="clipc">'+ic('clip',12)+m.docs.length+'</span>':'')+'</small></span><span class="rq"><b>'+sign+fmt(m.qty)+'</b><small>'+esc(p.unit)+'</small>'+(p.kg>0?'<small>'+fmt(kgOf(p,m.qty))+' kg</small>':'')+'</span></button>';
 }
 function groupedList(ms,pid){
   var html='',cur=null,tot={};
@@ -2406,7 +2417,7 @@ function gazOzet(){
   var recent=sortShips().reverse().slice(0,3);
   return '<div class="stack"><section class="card"><div class="hd" style="margin-bottom:0"><h2 class="h">Tüp durumu</h2><span class="muted" style="font-size:13px">'+S.cyl.length+' tüp</span></div><div class="sgrid">'+tiles+'</div>'+alert+'</section>'+
     '<div class="btns"><button type="button" class="btn pri" data-a="gidis">'+ic('gidis')+'Doluma gönder</button><button type="button" class="btn" data-a="donus">'+ic('donus')+'Dolumdan geldi</button></div>'+
-    '<button type="button" class="btn" style="width:100%" data-a="cuse0">Tüpü kullanıma al (tüp değişimi)</button>'+
+    '<button type="button" class="btn" style="width:100%" data-a="cuse0">Tüpü kullanıma al (tüp değişimi)</button>'+'<button type="button" class="btn" style="width:100%;margin-top:8px" data-a="cylfix">Tüp durumunu elle düzelt</button>'+
     '<section class="card flush"><div class="hd" style="margin:12px 0 2px"><h2 class="h">Tüpler'+(U.cf!=='all'?' · '+ST[U.cf]:'')+'</h2>'+(U.cf!=='all'?'<button type="button" class="link" data-a="cfilter" data-k="all">Filtreyi kaldır</button>':'<button type="button" class="link" data-a="cylnew">Tüp ekle</button>')+'</div>'+(list.length?'<div class="list">'+list.map(function(c){return cylRow(c,nets)}).join('')+'</div>':'<div class="empty">Bu durumda tüp yok.</div>')+'</section>'+
     '<section class="card flush"><div class="hd" style="margin:12px 0 2px"><h2 class="h">Son doluma gidiş-geliş</h2><button type="button" class="link" data-a="tab" data-t="hareket">Tümü</button></div>'+(recent.length?'<div class="list">'+recent.map(function(s){return shipRow(s,nets,true)}).join('')+'</div>':'<div class="empty">Henüz sevkiyat kaydı yok.</div>')+'</section>'+gazChangeCard('short',true)+'</div>';
 }
@@ -2530,21 +2541,17 @@ function pnLastShip(dir){var a=sortShips().filter(function(s){return s.dir===dir
 function pnLastRec(){var l='';S.moves.forEach(function(m){if(m.date>l)l=m.date});S.ships.forEach(function(x){if(x.date>l)l=x.date});return l}
 function pnAgo(d){var n=daysBetween(d,todayISO());return n<=0?'bugün':n===1?'dün':n+' gün önce'}
 function pnHero(){
-  var bad=0,warn=0;
-  S.products.forEach(function(p){var s=stockShort(p,sum(balances(p.id)))[0];if(s==='bad')bad++;else if(s==='warn')warn++});
-  var n=activeAlerts().length, last=pnLastRec(), main=S.locations[0];
-  var head=bad?bad+' üründe stok yok':warn?warn+' üründe kritik seviye':'Stoklar yeterli';
-  var kp=S.products.map(function(p){
-    var B=balances(p.id),t=sum(B),st=stockShort(p,t);
-    return '<div class="pn-kpi t-'+st[0]+'"><small>'+esc(p.name)+'</small><b class="num">'+fmt(t)+'<span> '+esc(p.unit)+'</span></b><em>Tesiste '+fmt(B[main.id]||0)+'</em></div>';
+  var main=S.locations[0],last=pnLastRec();
+  var tiles=S.products.map(function(p){
+    var B=balances(p.id),t=sum(B);
+    return '<div class="pn-tile"><small>'+esc(p.name)+'</small><b class="num">'+fmt(t)+'<span> '+esc(p.unit)+'</span></b><em>Tesiste '+fmt(B[main.id]||0)+'</em></div>';
   }).join('');
-  kp+='<div class="pn-kpi t-'+(n?'warn':'ok')+'"><small>Açık uyarı</small><b class="num">'+n+'</b><em>'+(n?'Aşağıda onaylayın':'Hepsi onaylı')+'</em></div>';
-  return '<section class="card pn-hero"><p class="h">Şu an</p><h2 class="pn-h">'+head+'</h2><p class="eq">'+(last?'Son kayıt '+dshort(last)+' · '+pnAgo(last):'Henüz kayıt yok')+'</p><div class="pn-kpis">'+kp+'</div></section>';
+  return '<section class="card pn-sum"><div class="hd" style="margin-bottom:6px"><h2 class="h">Stok</h2><span class="muted" style="font-size:13px">'+(last?'Son kayıt '+dshort(last)+' · '+pnAgo(last):'Henüz kayıt yok')+'</span></div><div class="pn-tiles">'+tiles+'</div></section>';
 }
 function pnAlerts(){
   var all=alertList(),ack=S.ack||{},act=all.filter(function(a){return a.go||!ack[a.key]});
   var h='<section class="card" id="notif"><div class="hd"><h2 class="h">Uyarılar'+(act.length?' <span class="nbadge">'+act.length+'</span>':'')+'</h2>'+(act.length>1?'<button type="button" class="link" data-a="alackall">Tümünü onayla</button>':'')+'</div>';
-  if(!act.length)return h+'<p class="cover" style="margin-top:2px">Dikkat gerektiren durum yok.'+(all.length?' ('+all.length+' uyarı onaylandı.)':'')+'</p></section>';
+  if(!act.length)return '';
   return h+act.map(function(a){return '<div class="nrow t-'+a.tone+'"><i class="nd"></i><span><b>'+esc(a.title)+'</b><small>'+esc(a.text)+'</small></span>'+(a.go?'<button type="button" class="btn sm pri" data-a="'+a.go.a+'" data-id="'+esc(a.go.id)+'">Devam et</button>':'<button type="button" class="btn sm" data-a="alack" data-k="'+esc(a.key)+'">Onayla</button>')+'</div>'}).join('')+'</section>';
 }
 function pnTree(p){
@@ -2575,7 +2582,8 @@ function pnGas(){
   if(!S.cyl.length)return h+'<div class="empty">Henüz tüp eklenmedi.</div></section>';
   var outs=pnOut(), lg=pnLastShip('gidis'), ld=pnLastShip('donus'), ls=logStats();
   var oldest=outs.length&&outs[0].date?daysBetween(outs[0].date,todayISO()):null;
-  h+='<div class="pn-tiles">'+STO.map(function(k){return '<div class="pn-tile"><small>'+ST[k]+'</small><b class="num">'+cnt[k]+'</b></div>'}).join('')+'</div>';
+  h+=['kullanimda','yedek'].map(function(k){var a=S.cyl.filter(function(c){return c.status===k});return '<div class="pn-grp"><small>'+ST[k]+' · '+a.length+'</small><div class="pn-chips">'+(a.length?a.map(function(c){return '<button type="button" class="chip" data-a="cyl" data-id="'+c.id+'">'+esc(c.serial)+'</button>'}).join(''):'<span class="muted">Yok</span>')+'</div></div>'}).join('');
+  h+='<p class="cover">Dolu '+cnt.dolu+' · Boş '+cnt.bos+' · Doluma giden '+cnt.doluma+'</p>';
   if(outs.length){
     var list=outs.slice(0,6).map(function(o){return esc(o.c.serial)+(o.date?' · '+daysBetween(o.date,todayISO())+' gün':'')}).join(', ')+(outs.length>6?' …':'');
     h+='<div class="pn-out"><b>Doluma gitti, dönüş bekleniyor: '+outs.length+' tüp</b><small>'+(oldest!=null?'En eski '+oldest+' gündür. ':'')+list+'</small></div>';
@@ -2690,14 +2698,20 @@ function sheetCylAdd(s){
     (ad?'<p class="lbl" style="margin:4px 0 6px">Bu oturumda eklenen: '+ad+' tüp</p><p class="muted" style="font-size:13.5px;margin-bottom:10px">'+F.added.map(esc).join(' · ')+'</p>':'<p class="muted" style="font-size:13.5px;margin-bottom:10px">Ekle\'ye basınca tüp kaydedilir, kutu temizlenir ve bir sonrakini yazabilirsiniz. Bitince Bitti\'ye basın.</p>')+errBox(s)+
     '<div class="acts"><button type="button" class="btn" data-a="close">Bitti</button><button type="submit" class="btn pri">Ekle</button></div></form>');
 }
+function sheetCylFix(s){
+  var list=S.cyl.slice().sort(function(a,b){return a.serial.localeCompare(b.serial,'tr',{numeric:true})});
+  var rows=list.map(function(c){return '<div class="cfx"><b>'+esc(c.serial)+'</b><div class="tgrid" style="grid-template-columns:repeat(3,1fr)">'+STO.map(function(k){return '<button type="button" class="tbtn st-'+k+'" data-a="setst2" data-id="'+c.id+'" data-s="'+k+'" aria-pressed="'+(c.status===k)+'">'+ST[k]+'</button>'}).join('')+'</div></div>'}).join('');
+  return sheetFrame('Durumu elle düzelt','<p class="muted" style="font-size:13px;margin:0 0 10px">Yanlış işaretlenen tüpün durumunu buradan değiştirin.</p>'+(rows||'<p class="muted">Tüp yok.</p>'));
+}
 function sheetCyl(s){
   var c=S.cyl.find(function(x){return x.id===s.id});if(!c)return '';
-  var hist=cylHist(c.id).reverse(),nets=netMap();
-  var btns='<div class="tgrid" style="grid-template-columns:repeat(3,1fr)">'+STO.map(function(k){return '<button type="button" class="tbtn st-'+k+'" data-a="setst" data-s="'+k+'" aria-pressed="'+(c.status===k)+'">'+ST[k]+'</button>'}).join('')+'</div>';
-  var hl=hist.length?hist.slice(0,10).map(function(h){var net=nets[h.s.id+':'+h.it.cid];return '<div class="hrow2"><span class="muted">'+esc(dshort(h.s.date))+'</span><span>'+(h.s.dir==='gidis'?'Doluma gitti':'Dolumdan geldi')+'</span><b>'+fmtKg(h.it.kg)+' kg'+(net!=null?' · +'+fmtKg(net):'')+'</b></div>'}).join(''):'<p class="muted" style="font-size:14px">Bu tüp için henüz sevkiyat kaydı yok.</p>';
+  var hist=cylHist(c.id),nets=netMap(),outN=0,backN=0,klor=0;
+  hist.forEach(function(x){if(x.s.dir==='gidis')outN++;else{backN++;var v=nets[x.s.id+':'+x.it.cid];if(v!=null)klor+=v}});
+  var stats='<div class="pn-tiles"><div class="pn-tile"><small>Doluma gönderildi</small><b class="num">'+outN+'<span> kez</span></b></div><div class="pn-tile"><small>Dolu geldi</small><b class="num">'+backN+'<span> kez</span></b></div><div class="pn-tile"><small>Toplam klor</small><b class="num">'+fmtKg(klor)+'<span> kg</span></b></div></div>';
+  var rows=hist.length?hist.slice().reverse().map(function(x){var net=nets[x.s.id+':'+x.it.cid],g=x.s.dir==='gidis';
+    return '<button type="button" class="row t-'+(g?'gidis':'donus')+'" data-a="shipinfo" data-id="'+x.s.id+'"><span class="badge">'+ic(g?'gidis':'donus')+'</span><span class="rt"><b>'+(g?'Doluma gitti':'Dolu geldi')+'</b><small>'+esc(dshort(x.s.date))+' · '+fmtKg(x.it.kg)+' kg'+(net!=null?' · +'+fmtKg(net)+' kg klor':'')+'</small></span></button>'}).join(''):'<p class="muted" style="font-size:14px">Bu tüp için henüz sevkiyat kaydı yok.</p>';
   var del=hist.length?'':(s.ask?'<p style="margin:12px 0 10px">Tüp silinsin mi?</p><div class="acts"><button type="button" class="btn" data-a="cancelask">Vazgeç</button><button type="button" class="btn dng" data-a="delcyl">Evet, sil</button></div>':'<div class="acts"><button type="button" class="btn dng" data-a="askdel">Tüpü sil</button></div>');
-  var useBtn=(c.status==='dolu'||c.status==='yedek')?'<button type="button" class="btn pri" style="width:100%;margin-bottom:14px" data-a="cuse" data-id="'+c.id+'">Kullanıma al (tarih gir)</button>':'';
-  return sheetFrame(c.serial,useBtn+'<p class="lbl" style="margin-bottom:8px">Durum (elle düzeltme)</p>'+btns+'<p class="lbl" style="margin:4px 0 4px">Geçmiş</p>'+hl+del);
+  return sheetFrame(c.serial,'<p style="margin:0 0 10px"><span class="spill st-'+c.status+'">'+ST[c.status]+'</span></p>'+stats+'<p class="lbl" style="margin:14px 0 6px">Hareket geçmişi</p>'+rows+'<p class="muted" style="font-size:12.5px;margin:12px 0 0">Bir harekete dokunarak detayını görebilirsiniz.</p>'+del);
 }
 function sheetShip(s){
   var F=s.f,out=s.kind==='gidis',nets=netMap(),taken=shipDraftsTaken(s.id||null);
@@ -2749,7 +2763,7 @@ function sheetMoveInfo(s){
     if(m.irs&&m.irs.kg!=null)rows.push(['İrsaliye kilosu',fmtKg(m.irs.kg)+' kg']);
   }
   if(m.note)rows.push(['Not',m.note]);
-  return sheetFrame('Hareket bilgisi',rows.map(function(r){return '<div class="hrow2" style="grid-template-columns:110px 1fr"><span class="muted">'+esc(r[0])+'</span><b style="text-align:left">'+esc(r[1])+'</b></div>'}).join('')+(typeof docsInfo==='function'?docsInfo(m):'')+(tutFor(p)&&m.type==='alim'?tutSection(m,'move'):'')+'<p class="muted" style="font-size:13.5px;margin:14px 0 4px">Bu ekran yalnızca bilgi içindir. Düzeltmek için Hareketler sekmesinde bu kaydı açın.</p><div class="acts"><button type="button" class="btn" data-a="close">Kapat</button><button type="button" class="btn pri" data-a="minfogo">Hareketler\'de aç</button></div>');
+  return sheetFrame('Hareket bilgisi',rows.map(function(r){return '<div class="hrow2" style="grid-template-columns:110px 1fr"><span class="muted">'+esc(r[0])+'</span><b style="text-align:left">'+esc(r[1])+'</b></div>'}).join('')+(typeof docsInfo==='function'?docsInfo(m):'')+(tutFor(p)&&m.type==='alim'?tutSection(m,'move'):'')+(m.eds&&m.eds.length?'<p class="muted" style="font-size:11.5px;margin:10px 0 0;line-height:1.5">Düzenlendi: '+m.eds.map(function(x){return dshort(iso(new Date(x)))+' '+tm(x)}).join(' · ')+'</p>':'')+'<div class="acts"><button type="button" class="btn" data-a="close">Kapat</button><button type="button" class="btn pri" data-a="minedit" data-id="'+esc(m.id)+'">Düzenle</button></div>');
 }
 function sheetGlInfo(s){
   var e=S.gazLog.find(function(x){return x.id===s.id});if(!e)return '';
@@ -3087,7 +3101,7 @@ function qeSubmit(){
   persist();U.sheet=null;renderSheet();render();toast(cnt+' kayıt eklendi',snap);
 }
 
-var SHEETS={dv:sheetDv,bk:sheetBk,tutset:sheetTutSet,tutview:sheetTutView,qe:sheetQe,backup:sheetBackup,gazlog:sheetGazLog,move:sheetMove,product:sheetProduct,loc:sheetLoc,cylAdd:sheetCylAdd,cylUse:sheetCylUse,minfo:sheetMoveInfo,glinfo:sheetGlInfo,cyl:sheetCyl,gidis:sheetShip,donus:sheetShip,ship:sheetShipDetail,restore:sheetRestore,text:sheetText,confirm:sheetConfirm};
+var SHEETS={dv:sheetDv,bk:sheetBk,tutset:sheetTutSet,tutview:sheetTutView,qe:sheetQe,backup:sheetBackup,gazlog:sheetGazLog,move:sheetMove,product:sheetProduct,loc:sheetLoc,cylAdd:sheetCylAdd,cylfix:sheetCylFix,cylUse:sheetCylUse,minfo:sheetMoveInfo,glinfo:sheetGlInfo,cyl:sheetCyl,gidis:sheetShip,donus:sheetShip,ship:sheetShipDetail,restore:sheetRestore,text:sheetText,confirm:sheetConfirm};
 
 function renderSheet(first){
   var L=$('#layer'),s=U.sheet,prev=0;
@@ -3102,7 +3116,7 @@ function renderSheet(first){
 function closeSheet(){var s=U.sheet;if(s&&(s.kind==='dv'||s.kind==='tutview')&&s.back){U.sheet=s.back;renderSheet();return}U.sheet=null;renderSheet()}
 function err(msg){if(U.sheet)U.sheet.err=msg;var el=$('#f-err');if(el)el.textContent=msg}
 var toastT=null;
-var APP_VER='2026-11-26.21';
+var APP_VER='2026-11-26.24';
 var UNDO=null;
 function selbar(){
   try{
@@ -3150,17 +3164,13 @@ function spark(pid){
   return '<div class="spr"><svg class="spk" width="140" height="24" viewBox="0 0 137 24" role="img" aria-label="Son 14 gün kullanım">'+bars+'</svg><small>14 gün · ort. '+fmt(Math.round(tot/14*10)/10)+' / gün</small></div>';
 }
 function quickCard(){
-  var y=iso(addDays(new Date(),-1)),t7=iso(addDays(new Date(),-7));
-  var h='<section class="card" id="quick"><div class="hd" style="margin-bottom:2px"><h2 class="h">Bugünün kullanımı</h2><span class="muted" style="font-size:13px">'+dshort(todayISO())+'</span></div>';
+  var h='<section class="card" id="quick"><div class="hd" style="margin-bottom:4px"><h2 class="h">Bugün</h2><span class="muted" style="font-size:13px">'+dshort(todayISO())+'</span></div>';
   S.products.forEach(function(p){
-    var tu=todayUse(p.id),ld=lastUseDate(p.id),rq=recentQty(p.id,'kullanim').slice(0,3);
-    var yUse=0,recent=false;movesOf(p.id).forEach(function(m){if(m.type==='kullanim'){if(m.date===y)yUse++;if(m.date>=t7&&m.date<todayISO())recent=true}});
-    var st=tu.n?'<small class="ok">Bugün: '+fmt(tu.q)+' '+esc(p.unit)+(p.kg>0?' · '+fmt(kgOf(p,tu.q))+' kg':'')+(tu.n>1?' ('+tu.n+' kayıt)':'')+'</small>':'<small>'+(ld?'Bugün girilmedi · son: '+dshort(ld):'Henüz kullanım yok')+'</small>';
-    h+='<div class="qrow"><div class="qt"><b>'+esc(p.name)+'</b>'+st+'</div>'+spark(p.id)+'<div class="chips">'+rq.map(function(q){return '<button type="button" class="chip q" data-a="qopen" data-p="'+p.id+'" data-q="'+q+'">− '+fmt(q)+'</button>'}).join('')+'<button type="button" class="chip" data-a="qopen" data-p="'+p.id+'" data-q="">Başka miktar</button>'+
-      (!yUse&&recent?'<button type="button" class="chip" data-a="qopen" data-p="'+p.id+'" data-q="" data-dt="'+y+'">Dün için gir</button>':'')+
-      '<button type="button" class="chip" data-a="qopen" data-p="'+p.id+'" data-q="" data-ty="alim">Teslimat geldi</button></div></div>';
+    var tu=todayUse(p.id),ld=lastUseDate(p.id);
+    var st=tu.n?'Bugün '+fmt(tu.q)+' '+esc(p.unit):(ld?'Son kullanım '+dshort(ld):'Henüz kullanım yok');
+    h+='<div class="qrow2"><div class="qt"><b>'+esc(p.name)+'</b><small>'+st+'</small></div><div class="qbtns"><button type="button" class="qb" data-a="qopen" data-p="'+p.id+'" data-q="" data-ty="kullanim">− Kullanım</button><button type="button" class="qb pri" data-a="qopen" data-p="'+p.id+'" data-q="" data-ty="alim">+ Teslimat</button></div></div>';
   });
-  return h+'<p class="note-s" style="margin-top:6px">Bir miktara dokunun; form dolu açılır, kontrol edip Kaydet\'e basın.</p></section>';
+  return h+'</section>';
 }
 function backupLine(){
   try{if(CLOUD&&CLOUD.ok&&CLOUD.at)return 'Drive yedeği: '+dtr(iso(new Date(CLOUD.at)))+' '+tm(CLOUD.at)}catch(e){}
@@ -3229,6 +3239,7 @@ function saveMove(){
   else if(F.type==='transfer'){from=F.from;to=F.to;if(from===to)return err('Nereden ve nereye aynı konum olamaz.')}
   else if(F.dir==='+')to=F.to;else from=F.to;
   var mv={id:F.id||uid(),ts:F.ts||Date.now(),date:F.date,type:F.type,productId:p.id,qty:q,from:from,to:to,note:F.note.trim()};
+  if(F.id){var pvM=S.moves.find(function(x){return x.id===F.id});if(pvM){if(pvM.eds)mv.eds=pvM.eds.slice();if(!pvM.draft&&['type','productId','qty','from','to','date','note'].some(function(k){return (pvM[k]==null?'':pvM[k])!==(mv[k]==null?'':mv[k])}))mv.eds=(mv.eds||[]).concat([Date.now()])}}
   if(Array.isArray(F.docs)&&F.docs.length)mv.docs=F.docs;
   if(kant)mv.kantar=kant;
   if(irs)mv.irs=irs;
@@ -3508,6 +3519,7 @@ var ACT={
   cuse:function(el){openCylUse(el.dataset.id)},
   cuse0:function(){openCylUse(null)},
   minfo:function(el){U.sheet={kind:'minfo',id:el.dataset.id};renderSheet(true)},
+  minedit:function(el){var m=S.moves.find(function(x){return x.id===el.dataset.id});if(!m)return;U.mod=m.productId;openMove(m.id)},
   minfogo:function(el){var m=S.moves.find(function(x){return x.id===U.sheet.id});U.tab='hareket';U.mod=m&&P(m.productId)?m.productId:S.products[0].id;U.filter='all';U.limit=60;U.sheet=null;renderSheet();render();window.scrollTo(0,0)},
   shipinfo:function(el){U.sheet={kind:'ship',id:el.dataset.id,ask:false,ro:true};renderSheet(true)},
   glinfo:function(el){U.sheet={kind:'glinfo',id:el.dataset.id};renderSheet(true)},
@@ -3517,6 +3529,8 @@ var ACT={
   alack:function(el){if(!S.ack)S.ack={};S.ack[el.dataset.k]=Date.now();persist();render();toast('Bildirim onaylandı')},
   alackall:function(){if(!S.ack)S.ack={};activeAlerts().forEach(function(a){S.ack[a.key]=Date.now()});persist();render();toast('Bildirimler onaylandı')},
   cyl:function(el){U.sheet={kind:'cyl',id:el.dataset.id,ask:false};renderSheet(true)},
+  cylfix:function(){U.sheet={kind:'cylfix',ask:false};renderSheet(true)},
+  setst2:function(el){var c=S.cyl.find(function(x){return x.id===el.dataset.id});if(!c)return;setCylSt(c,el.dataset.s);persist();renderSheet(true);render();toast(c.serial+': '+ST[c.status])},
   setst:function(el){var c=S.cyl.find(function(x){return x.id===U.sheet.id});if(!c)return;setCylSt(c,el.dataset.s);persist();U.sheet=null;renderSheet();render();toast(c.serial+': '+ST[c.status])},
   delcyl:function(){if((S.shipDrafts||[]).some(function(d){return d.items.some(function(i){return i.cid===U.sheet.id})})){toast('Bu tüp yarım kalan bir sevkiyatta. Önce taslağı düzenleyin.');return}if((S.ships||[]).some(function(x){return x.items.some(function(i){return i.cid===U.sheet.id})})){toast('Bu tüp bir sevkiyat kaydında kullanılmış, silinemez.');return}S.cyl=S.cyl.filter(function(c){return c.id!==U.sheet.id});tombAdd(U.sheet.id);persist();U.sheet=null;renderSheet();render();toast('Tüp silindi')},
   gidis:function(){openShip('gidis')},
