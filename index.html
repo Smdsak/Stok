@@ -1415,8 +1415,8 @@ function kantarBlock(F,p){
       field('1. tartım (kg)','<input type="text" inputmode="decimal" data-f="kT1" autocomplete="off" value="'+esc(F.kT1||'')+'">')+
       field('2. tartım (kg)','<input type="text" inputmode="decimal" data-f="kT2" autocomplete="off" value="'+esc(F.kT2||'')+'">')+
     '</div>'+
-    '<div class="crow" style="margin:0 0 8px"><label><input type="checkbox" data-kamb="1"'+(F.kAmbOn?' checked':'')+'><span class="csub">Ambalaj (paket darası) düşülsün</span></label></div>'+
-    (F.kAmbOn?field('Ambalaj ağırlığı, toplam (kg)','<input type="text" inputmode="decimal" data-f="kAmb" autocomplete="off" value="'+esc(F.kAmb||'')+'">'):'')+
+    '<div class="crow" style="margin:0 0 8px"><label><input type="checkbox" data-kamb="1"'+(F.kAmbOn?' checked':'')+'><span class="csub">Ambalaj darası düşülsün</span></label></div>'+
+    (F.kAmbOn?field('Ambalaj darası, toplam (kg), kutu, karton vb. dahil','<input type="text" inputmode="decimal" data-f="kAmb" autocomplete="off" value="'+esc(F.kAmb||'')+'">'):'')+
     '<p id="k-adet" class="note-s" style="margin:-4px 0 10px;font-weight:600">'+tutAdetText(F,p)+'</p>'+
     '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">'+
       field('Kantar fişi no (isteğe bağlı)','<input type="text" data-f="kNo" autocomplete="off" value="'+esc(F.kNo||'')+'">')+
@@ -1496,7 +1496,7 @@ function tutHtml(sn){
     var urun=e(st.urun||''),urunK=e(String(st.urun||'').toLocaleLowerCase('tr-TR'));
     if(st.mode==='kantar'){
       p.push(lead+'Sözleşme kapsamında '+dS+' tarihinde sevkiyatı yapılan ekli kantar fişindeki miktar kadar '+urunK+' teslim alınmıştır.');
-      ek='<div class="ek"><p>Ek :</p><p>'+dS+' tarihli '+e(st.kantarAd||'Bolu Belediyesi Kantar Fişi')+'</p><p>('+kgS+' kg '+urunK+')</p>'+(sn.amb>0?'<p>Brüt '+fmt(sn.brut)+' kg - ambalaj (paket darası) '+fmt(sn.amb)+' kg</p>':'')+'</div>';
+      ek='<div class="ek"><p>Ek :</p><p>'+dS+' tarihli '+e(st.kantarAd||'Bolu Belediyesi Kantar Fişi')+'</p><p>('+kgS+' kg '+urunK+')</p>'+(sn.amb>0?'<p>Brüt '+fmt(sn.brut)+' kg - ambalaj darası '+fmt(sn.amb)+' kg</p>':'')+'</div>';
     }else p.push(lead+'Bu kapsamda '+dtr(sn.date)+' tarihinde '+kgS+'kg '+urun+' teslim alınmıştır.');
     sig=['Teslim Alan','Teslim Eden'];
   }
@@ -1730,7 +1730,7 @@ function tutStore(rec,kind,blob,ext,mime,thumb,role){
 }
 function tutPick(files){
   var s=U.sheet;if(!s)return;var isShip=s.kind==='ship'||s.kind==='gidis'||s.kind==='donus';if(!isShip&&s.kind!=='minfo'&&s.kind!=='move')return;
-  var kind=isShip?'ship':'move',rec=tutRecOf(kind,s.id);if(!rec)return;
+  var kind=isShip?'ship':'move',rec=tutRecOf(kind,s.id||(s.f&&s.f.id));if(!rec)return;
   var role=tutCurRole(kind);
   var chain=Promise.resolve(),bad=0;
   files.forEach(function(f){chain=chain.then(function(){
@@ -1749,7 +1749,7 @@ document.addEventListener('change',function(e){
   var files=[].slice.call(el.files||[]);try{el.value=''}catch(x){}
   if(files.length)tutPick(files);
 });
-function tutDocsOf(s){var r=s&&tutRecOf((s.kind==='ship'||s.kind==='gidis'||s.kind==='donus')?'ship':(s.kind==='minfo'||s.kind==='move')?'move':'',s.id);return r&&r.tut&&r.tut.docs||[]}
+function tutDocsOf(s){var r=s&&tutRecOf((s.kind==='ship'||s.kind==='gidis'||s.kind==='donus')?'ship':(s.kind==='minfo'||s.kind==='move')?'move':'',s.id||(s.f&&s.f.id));return r&&r.tut&&r.tut.docs||[]}
 function tutDvOpen(el){
   var s=U.sheet,l=tutDocsOf(s),i=+el.dataset.i||0,d=l[i];if(!d)return;
   if(d.mime==='application/pdf'){
@@ -2743,7 +2743,7 @@ function sheetMoveInfo(s){
     else rows.push(['Konum',lname(m.to||m.from)+' · '+(m.to?'Fazla çıktı':'Eksik çıktı')]);
   }
   if(!p.multi&&m.type==='alim'){
-    if(m.kantar){rows.push(['Kantar tarihi',dtr(m.kantar.date)]);if(m.kantar.t1!=null)rows.push(['1. tartım',fmtKg(m.kantar.t1)+' kg']);if(m.kantar.t2!=null)rows.push(['2. tartım',fmtKg(m.kantar.t2)+' kg']);if(m.kantar.amb>0){rows.push(['Brüt fark',fmtKg(m.kantar.brut)+' kg']);rows.push(['Ambalaj (paket darası)',fmtKg(m.kantar.amb)+' kg'])}rows.push(['Kantar net',fmtKg(m.kantar.kg)+' kg'])}
+    if(m.kantar){rows.push(['Kantar tarihi',dtr(m.kantar.date)]);if(m.kantar.t1!=null)rows.push(['1. tartım',fmtKg(m.kantar.t1)+' kg']);if(m.kantar.t2!=null)rows.push(['2. tartım',fmtKg(m.kantar.t2)+' kg']);if(m.kantar.amb>0){rows.push(['Brüt fark',fmtKg(m.kantar.brut)+' kg']);rows.push(['Ambalaj darası',fmtKg(m.kantar.amb)+' kg'])}rows.push(['Kantar net',fmtKg(m.kantar.kg)+' kg'])}
     if(m.kantar&&m.kantar.no)rows.push(['Kantar fişi no',m.kantar.no]);
     if(m.irs&&m.irs.no)rows.push(['İrsaliye no',m.irs.no]);
     if(m.irs&&m.irs.kg!=null)rows.push(['İrsaliye kilosu',fmtKg(m.irs.kg)+' kg']);
@@ -3102,7 +3102,7 @@ function renderSheet(first){
 function closeSheet(){var s=U.sheet;if(s&&(s.kind==='dv'||s.kind==='tutview')&&s.back){U.sheet=s.back;renderSheet();return}U.sheet=null;renderSheet()}
 function err(msg){if(U.sheet)U.sheet.err=msg;var el=$('#f-err');if(el)el.textContent=msg}
 var toastT=null;
-var APP_VER='2026-11-26.20';
+var APP_VER='2026-11-26.21';
 var UNDO=null;
 function selbar(){
   try{
