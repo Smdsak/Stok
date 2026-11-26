@@ -619,7 +619,7 @@ var fmt=function(n){return (Math.round(n*100)/100).toLocaleString('tr-TR')};
 var fmtKg=function(n){return (Math.round(n*10)/10).toLocaleString('tr-TR',{maximumFractionDigits:1})};
 var esc=function(s){return String(s==null?'':s).replace(/[&<>"']/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]})};
 var uid=function(){return Math.random().toString(36).slice(2,9)+Date.now().toString(36).slice(-4)};
-var parseNum=function(s){return parseFloat(String(s).replace(',','.'))};
+var parseNum=function(s){var t=String(s==null?'':s).trim().replace(/\s+/g,'');if(t==='')return NaN;if(/^-?\d{1,3}(\.\d{3})+(,\d+)?$/.test(t))t=t.replace(/\./g,'');return parseFloat(t.replace(',','.'))};
 var sum=function(o){return Object.keys(o).reduce(function(a,k){return a+o[k]},0)};
 function dshort(s){var d=parse(s);var y=d.getFullYear()!==new Date().getFullYear();return d.getDate()+' '+MON3[d.getMonth()]+(y?' '+d.getFullYear():'')}
 function dlong(s){if(s===todayISO())return 'Bugün';if(s===iso(addDays(new Date(),-1)))return 'Dün';var d=parse(s);var y=d.getFullYear()!==new Date().getFullYear();return DAYFULL[d.getDay()]+', '+d.getDate()+' '+MONTHS[d.getMonth()]+(y?' '+d.getFullYear():'')}
@@ -755,6 +755,7 @@ function activeAlerts(){var k=S.ack||{};return alertList().filter(function(a){re
 function pruneAck(){if(!S||!S.ack)return;var on={};alertList().forEach(function(a){on[a.key]=1});Object.keys(S.ack).forEach(function(k){if(!on[k])delete S.ack[k]})}
 function persist(){
   try{upgradeS();pruneAck()}catch(e){}
+  try{(S.moves||[]).forEach(function(m){if(m.draft)m.qty=0})}catch(e){}
   try{localStorage.setItem(KEY,JSON.stringify(S));storageOk=true}catch(e){storageOk=false}
   if(mirrorOn){try{idbPut(JSON.stringify(S))}catch(e){}snapshot('Otomatik kopya',true);cloudSchedule()}
 }
@@ -831,10 +832,18 @@ function findOrMakeFolder(name,parent){
   });
 }
 function ensureDirs(){
+  if(CLOUD.dirs){
+    /* önbellekteki kök klasörler her kullanımda doğrulanır; çöpe atılmış ya da silinmişse yeniden kurulur */
+    var ids=[CLOUD.dirs.root,CLOUD.dirs.yedek,CLOUD.dirs.foto];
+    return Promise.all(ids.map(function(id){return dfetch('https://www.googleapis.com/drive/v3/files/'+id+'?fields=id,trashed').then(function(r){return r.json()}).then(function(j){return !(j&&j.trashed===true)}).catch(function(e){return !(e&&(e.code==='http404'||e.code==='http403'))})})).then(function(oks){
+      if(oks.every(Boolean)){CLOUD.dirsOk=Date.now();return CLOUD.dirs}
+      CLOUD.dirs=null;CLOUD.dirsOk=0;CLOUD.mdirs={};return ensureDirs();
+    });
+  }
   if(CLOUD.dirs)return Promise.resolve(CLOUD.dirs);
   if(CLOUD.dirP)return CLOUD.dirP;
   CLOUD.dirP=findOrMakeFolder(ROOT_NAME,null).then(function(root){
-    return Promise.all([findOrMakeFolder(YEDEK_NAME,root),findOrMakeFolder(FOTO_NAME,root)]).then(function(a){CLOUD.dirs={root:root,yedek:a[0],foto:a[1]};CLOUD.dirP=null;return CLOUD.dirs});
+    return Promise.all([findOrMakeFolder(YEDEK_NAME,root),findOrMakeFolder(FOTO_NAME,root)]).then(function(a){CLOUD.dirs={root:root,yedek:a[0],foto:a[1]};CLOUD.dirsOk=Date.now();CLOUD.dirP=null;return CLOUD.dirs});
   }).catch(function(e){CLOUD.dirP=null;throw e});
   return CLOUD.dirP;
 }
@@ -904,21 +913,47 @@ function failState(e){
 function loadRemote(d,at,msg){
   snapshot('Drive\'dan yüklemeden önce');
   var h0=hashOf(JSON.stringify(d));
-  S=d;if(!Array.isArray(S.gazLog))S.gazLog=[];persist();
+  S=d;if(!Array.isArray(S.gazLog))S.gazLog=[];if(!Array.isArray(S.shipDrafts))S.shipDrafts=[];if(!S.tutSet)S.tutSet={};persist();
   if(hashOf(JSON.stringify(S))===h0)setHash(h0);
   cloudSetAt(at);CLOUD.at=at;CLOUD.ok=true;CLOUD.state='hazir';if(hashOf(JSON.stringify(S))!==h0)setTimeout(function(){cloudSchedule(0)},0);
   if(!U.sheet)render();if(msg)toast(msg);
 }
 function mergeData(loc,rem,syncedAt){
   var d=JSON.parse(JSON.stringify(rem));
-  var ids=function(a){var o={};(a||[]).forEach(function(x){if(x&&x.id)o[x.id]=1});return o};
-  if(!Array.isArray(d.gazLog))d.gazLog=[];
-  var mi=ids(d.moves);(loc.moves||[]).forEach(function(m){if(!mi[m.id]&&(m.ts||0)>syncedAt)d.moves.push(m)});
-  var si=ids(d.ships);(loc.ships||[]).forEach(function(x){if(!si[x.id]&&(x.ts||0)>syncedAt)d.ships.push(x)});
-  var gi=ids(d.gazLog);(loc.gazLog||[]).forEach(function(x){if(x.id&&!gi[x.id]&&!/^gz\d+$/.test(x.id))d.gazLog.push(x)});
-  var ci=ids(d.cyl);(loc.cyl||[]).forEach(function(x){if(!ci[x.id])d.cyl.push(x)});
-  var pi=ids(d.products);(loc.products||[]).forEach(function(x){if(!pi[x.id])d.products.push(x)});
-  var li=ids(d.locations);(loc.locations||[]).forEach(function(x){if(!li[x.id])d.locations.push(x)});
+  /* silme izleri (tombstone): iki tarafın izleri birleşir; izi olan kayıt geri gelmez */
+  var tb=Object.assign({},rem.tomb||{});Object.keys(loc.tomb||{}).forEach(function(k){tb[k]=Math.max(tb[k]||0,loc.tomb[k]||0)});
+  d.tomb=tb;
+  var dead=function(id){return !!tb[id]};
+  var at=function(a){var o={};(a||[]).forEach(function(x,i){if(x&&x.id)o[x.id]=i});return o};
+  /* aynı kimlikli kayıtta yerel belgeler eklenir, taslak kalemleri birleşir */
+  var mergeTut=function(r,l){
+    if(!l.tut||!(l.tut.docs||[]).length)return;
+    r.tut=r.tut||{docs:[]};if(!Array.isArray(r.tut.docs))r.tut.docs=[];
+    l.tut.docs.forEach(function(ld){var rd=r.tut.docs.find(function(x){return x.id===ld.id});if(!rd)r.tut.docs.push(ld);else if(!rd.drive&&ld.drive)rd.drive=ld.drive});
+  };
+  var mergeItems=function(r,l){
+    r.items=Array.isArray(r.items)?r.items:[];
+    (l.items||[]).forEach(function(li){var ri=r.items.find(function(x){return x.cid===li.cid});if(!ri)r.items.push(li);else if(li.kg!=null&&ri.kg==null)ri.kg=li.kg});
+  };
+  ['moves','ships','shipDrafts','gazLog','cyl','products','locations'].forEach(function(k){if(!Array.isArray(d[k]))d[k]=[]});
+  if(!Array.isArray(d.moves))d.moves=[];
+  var mi=at(d.moves);(loc.moves||[]).forEach(function(m){if(!m||!m.id||dead(m.id))return;if(mi[m.id]!==undefined){mergeTut(d.moves[mi[m.id]],m);return}if((m.ts||0)>syncedAt)d.moves.push(m)});
+  var si=at(d.ships);(loc.ships||[]).forEach(function(x){if(!x||!x.id||dead(x.id))return;if(si[x.id]!==undefined){mergeTut(d.ships[si[x.id]],x);return}if((x.ts||0)>syncedAt)d.ships.push(x)});
+  var di=at(d.shipDrafts);(loc.shipDrafts||[]).forEach(function(x){if(!x||!x.id||dead(x.id))return;if(di[x.id]!==undefined){var r=d.shipDrafts[di[x.id]];mergeTut(r,x);mergeItems(r,x);return}if((x.ts||0)>syncedAt)d.shipDrafts.push(x)});
+  var gi=at(d.gazLog);(loc.gazLog||[]).forEach(function(x){if(!x||!x.id||dead(x.id)||/^gz\d+$/.test(x.id))return;if(gi[x.id]===undefined)d.gazLog.push(x)});
+  var ci=at(d.cyl);(loc.cyl||[]).forEach(function(x){if(!x||!x.id||dead(x.id))return;if(ci[x.id]===undefined){d.cyl.push(x);return}var r=d.cyl[ci[x.id]];if((x.sts||0)>(r.sts||0))d.cyl[ci[x.id]]=JSON.parse(JSON.stringify(x))});
+  d.moves=d.moves.filter(function(x){return !dead(x.id)});
+  d.ships=d.ships.filter(function(x){return !dead(x.id)});
+  d.shipDrafts=d.shipDrafts.filter(function(x){return !dead(x.id)});
+  d.gazLog=d.gazLog.filter(function(x){return !dead(x.id)});
+  d.cyl=d.cyl.filter(function(x){return !dead(x.id)});
+  var pi=at(d.products);(loc.products||[]).forEach(function(x){if(x&&x.id&&pi[x.id]===undefined)d.products.push(x)});
+  var li=at(d.locations);(loc.locations||[]).forEach(function(x){if(x&&x.id&&li[x.id]===undefined)d.locations.push(x)});
+  /* tutanak bilgileri: ürün başına en son yazılan değer kazanır */
+  var rt=d.tutSet||{},lt=loc.tutSet||{},tsOut={};
+  Object.keys(rt).forEach(function(k){tsOut[k]=rt[k]});
+  Object.keys(lt).forEach(function(k){var l=lt[k],r=rt[k];if(l&&(!r||(l.ts||0)>(r.ts||0)))tsOut[k]=l});
+  d.tutSet=tsOut;
   d.ack=Object.assign({},loc.ack||{},d.ack||{});
   if((loc.lastBackupTs||0)>(d.lastBackupTs||0)){d.lastBackup=loc.lastBackup;d.lastBackupTs=loc.lastBackupTs}
   return d;
@@ -1065,8 +1100,13 @@ function docsHydrate(){
 /* yükleme kuyruğu */
 function docSlug(x){return nrm(x).replace(/[^a-z0-9]+/g,'-').replace(/^-|-$/g,'')||'belge'}
 function monthDir(ym){
-  CLOUD.mdirs=CLOUD.mdirs||{};if(CLOUD.mdirs[ym])return Promise.resolve(CLOUD.mdirs[ym]);
-  return ensureDirs().then(function(){return findOrMakeFolder(ym,CLOUD.dirs.foto)}).then(function(id){return CLOUD.mdirs[ym]=id});
+  /* ay klasörü önbelleği: çöpe atılmamış, silinmemiş ve doğru Fotoğraflar klasöründe olmalı */
+  return ensureDirs().then(function(){
+    CLOUD.mdirs=CLOUD.mdirs||{};
+    var c=CLOUD.mdirs[ym];
+    var ok=c?dfetch('https://www.googleapis.com/drive/v3/files/'+c+'?fields=id,trashed,parents').then(function(r){return r.json()}).then(function(j){return !!(j&&j.id&&!j.trashed&&(j.parents||[]).indexOf(CLOUD.dirs.foto)>=0)}).catch(function(e){return !(e&&(e.code==='http404'||e.code==='http403'))}):Promise.resolve(false);
+    return ok.then(function(v){if(v)return c;return findOrMakeFolder(ym,CLOUD.dirs.foto).then(function(id){CLOUD.mdirs[ym]=id;return id})});
+  });
 }
 function docUpload(m,d,k){
   return dbGet(d.id).then(function(rec){
@@ -1079,13 +1119,13 @@ function docUpload(m,d,k){
     });
   });
 }
-function docsRec(id){return S.moves.find(function(x){return x.id===id})||S.ships.find(function(x){return x.id===id})||null}
+function docsRec(id){return S.moves.find(function(x){return x.id===id})||S.ships.find(function(x){return x.id===id})||(S.shipDrafts||[]).find(function(x){return x.id===id})||null}
 function docsSync(){
   if(!CLOUD.db||docSyncing||!CLOUD.token&&CLOUD.state==='giris')return;
   if(typeof navigator!=='undefined'&&navigator.onLine===false)return;
   var q=[];
   S.moves.forEach(function(m){(m.docs||[]).forEach(function(d,k){if(!d.drive&&!d.skip)q.push({rid:m.id,did:d.id,k:k,tut:false})})});
-  S.moves.concat(S.ships).forEach(function(r){((r.tut&&r.tut.docs)||[]).forEach(function(d){if(!d.drive&&!d.skip)q.push({rid:r.id,did:d.id,k:0,tut:true})})});
+  S.moves.concat(S.ships,S.shipDrafts||[]).forEach(function(r){((r.tut&&r.tut.docs)||[]).forEach(function(d){if(!d.drive&&!d.skip)q.push({rid:r.id,did:d.id,k:0,tut:true})})});
   if(!q.length)return;
   docSyncing=true;
   var chain=getToken(false);
@@ -1171,7 +1211,7 @@ var TUT_ONES=['','bir','iki','üç','dört','beş','altı','yedi','sekiz','dokuz
 /* belge türleri: tut = imzalı tutanak, irs = irsaliye, kan = kantar fişi, ana = analiz raporu */
 var TUT_ROLES=[['tut','İmzalı tutanak'],['irs','İrsaliye'],['kan','Kantar fişi'],['ana','Analiz raporu']];
 var TUT_ROLE_NAME={tut:'Tutanak',irs:'İrsaliye',kan:'Kantar Fişi',ana:'Analiz Raporu'};
-var TUT_CSS='table.tub{width:100%;border-collapse:collapse;margin:14pt 0}table.tub td,table.tub th{border:1px solid #000;padding:4pt 6pt;text-align:center;font-size:11pt}@page{size:A4;margin:2.5cm}*{box-sizing:border-box}html,body{background:#fff}body{margin:0;font-family:Arial,Helvetica,sans-serif;font-size:12pt;line-height:1.5;color:#000}.page{max-width:16cm;margin:0 auto}h1{font-size:14pt;text-align:center;margin:0 0 28pt;letter-spacing:.5pt}p{text-align:justify;text-indent:1.25cm;margin:0 0 14pt}.ek{margin-top:24pt}.ek p{text-indent:0;margin:0 0 4pt}table.sig{width:100%;border-collapse:collapse;margin-top:44pt;page-break-inside:avoid}table.sig td{width:50%;vertical-align:top;padding:0 10pt 16pt 0;font-size:11pt}table.sig td b{font-size:12pt}.fl{margin-top:8pt}.ln{display:inline-block;width:3.2cm;border-bottom:1px solid #000;vertical-align:bottom}.bar{position:sticky;top:0;background:#f1f4f6;padding:12px;text-align:center;border-bottom:1px solid #ccc}.bar button{min-height:44px;padding:0 18px;border-radius:10px;border:0;background:#0b6b80;color:#fff;font-size:15px;font-weight:600}@media screen{body{background:#eef1f3}.page{background:#fff;padding:24px;margin:16px auto;box-shadow:0 1px 6px rgba(0,0,0,.15)}}@media print{.bar,.no-print{display:none!important}.page{max-width:none;margin:0;padding:0;box-shadow:none}}';
+var TUT_CSS='.evrak{text-align:right;margin:0 0 12pt;font-size:11pt}table.tub{width:100%;border-collapse:collapse;margin:14pt 0}table.tub td,table.tub th{border:1px solid #000;padding:4pt 6pt;text-align:center;font-size:11pt}@page{size:A4;margin:2.5cm}*{box-sizing:border-box}html,body{background:#fff}body{margin:0;font-family:Arial,Helvetica,sans-serif;font-size:12pt;line-height:1.5;color:#000}.page{max-width:16cm;margin:0 auto}h1{font-size:14pt;text-align:center;margin:0 0 28pt;letter-spacing:.5pt}p{text-align:justify;text-indent:1.25cm;margin:0 0 14pt}.ek{margin-top:24pt}.ek p{text-indent:0;margin:0 0 4pt}table.sig{width:100%;border-collapse:collapse;margin-top:44pt;page-break-inside:avoid}table.sig td{width:50%;vertical-align:top;padding:0 10pt 16pt 0;font-size:11pt}table.sig td b{font-size:12pt}.fl{margin-top:8pt}.ln{display:inline-block;width:3.2cm;border-bottom:1px solid #000;vertical-align:bottom}.bar{position:sticky;top:0;background:#f1f4f6;padding:12px;text-align:center;border-bottom:1px solid #ccc}.bar button{min-height:44px;padding:0 18px;border-radius:10px;border:0;background:#0b6b80;color:#fff;font-size:15px;font-weight:600}@media screen{body{background:#eef1f3}.page{background:#fff;padding:24px;margin:16px auto;box-shadow:0 1px 6px rgba(0,0,0,.15)}}@media print{.bar,.no-print{display:none!important}.page{max-width:none;margin:0;padding:0;box-shadow:none}}';
 
 function tutNum(n){
   n=Math.round(+n||0);if(n===0)return 'sıfır';if(n<0)return 'eksi '+tutNum(-n);
@@ -1212,7 +1252,7 @@ function tutMerge(p,inf){
   return o;
 }
 function tutFormInit(rec,p){
-  var m=tutMerge(p,rec&&rec.tutInfo);
+  var m=tutMerge(p,null); /* her zaman en son girilen tutanak bilgileri */
   return {tFirma:m.firma||'',tKisa:m.kisa||'',tIhale:m.ihale||'',tIhaleAdi:m.ihaleAdi||'',tSozlesme:m.sozlesme||''};
 }
 /* kantar tartımları: ikisi birlikte girilir; tamamı boşsa tamamlanmış kaydın kantarı korunur */
@@ -1232,6 +1272,7 @@ function tutKantarOf(F,prevM){
 function sheetTeslim(s,seg){
   var F=s.f,p=P(F.productId),rec=F.id?tutRecOf('move',F.id):null;
   if(F.tFirma===undefined)Object.assign(F,tutFormInit(rec,p));
+  if(F.evrak===undefined){F.evrak=rec&&rec.evrak?rec.evrak:F.date;F.evrakManual=!!(rec&&rec.evrak)}
   var h=heroP(p)+(seg||'')+
     '<p class="lbl" style="margin:6px 0 8px">Tutanak bilgileri</p>'+
     field('Firma adı','<input type="text" data-f="tFirma" autocomplete="off" value="'+esc(F.tFirma)+'">')+
@@ -1240,6 +1281,7 @@ function sheetTeslim(s,seg){
     field('İhale adı','<input type="text" data-f="tIhaleAdi" autocomplete="off" value="'+esc(F.tIhaleAdi)+'">')+
     field('Sözleşme tarihi','<input type="date" data-f="tSozlesme" value="'+esc(F.tSozlesme)+'">')+
     field('<span>Teslim tarihi</span>','<input type="date" data-f="date" value="'+esc(F.date)+'" max="'+todayISO()+'">'+dchips(F))+
+    field('Evrak düzenleme tarihi','<input type="date" data-f="evrak" value="'+esc(F.evrak||F.date)+'">')+
     field('Not (isteğe bağlı)','<input type="text" data-f="note" autocomplete="off" value="'+esc(F.note||'')+'">');
   if(F.id){
     h+=kantarBlock(F,p);
@@ -1256,7 +1298,7 @@ function sheetTeslim(s,seg){
 }
 /* tutanak anlık görüntüsü: yazdırıldığı andaki bilgiler ve kantar değerleri */
 function tutSnapFor(mv,p,kant,inf){
-  return {prod:p.id,kind:'teslim',set:tutMerge(p,inf),date:mv.date,unit:p.unit,qty:mv.qty,kg:kant?kant.kg:null,kd:kant?kant.date:null};
+  return {prod:p.id,kind:'teslim',set:tutMerge(p,inf),date:mv.date,evrak:mv.evrak||mv.date,unit:p.unit,qty:mv.qty,kg:kant?kant.kg:null,kd:kant?kant.date:null};
 }
 /* mode: 'draft' (taslak), 'print' (taslak kaydet + tutanağı aç), 'done' (tamamla, stoğa ekle) */
 function tutTeslimSave(mode){
@@ -1272,6 +1314,7 @@ function tutTeslimSave(mode){
     if(!/^\d{4}-\d{2}-\d{2}$/.test(inf.sozlesme))return err('Sözleşme tarihini girin.');
   }
   if(!F.date)return err('Teslim tarihini girin.');
+  if(F.date>todayISO())return err('Tarih bugünden ileri olamaz.');
   var prevM=F.id?S.moves.find(function(x){return x.id===F.id}):null;
   var kr=tutKantarOf(F,prevM);if(kr.err)return err(kr.err);
   var kant=kr.kant,qty=0,irs=null,irsT=str(F.iKg),irsNo=str(F.iNo),kNo=str(F.kNo);
@@ -1285,9 +1328,10 @@ function tutTeslimSave(mode){
       qty=Math.round(kant.kg/p.kg*1000)/1000;
       if(Math.abs(qty-Math.round(qty))>0.0005&&F.fracKey!==String(qty)){F.fracKey=String(qty);return err('Net '+fmt(kant.kg)+' kg = '+fmt(qty)+' '+p.unit+' ediyor, tam sayı değil. Doğruysa Kaydet\'e tekrar basın.')}
     }else{qty=parseNum(F.qty);if(!(qty>0))return err('Adedi girin.')}
-  }else qty=prevM&&!prevM.draft?prevM.qty:0;
+  }else{var dr0=mode==='done'?false:(prevM?!!prevM.draft:true);qty=prevM&&!prevM.draft?prevM.qty:0;if(!dr0&&kant&&!kr.keep&&p.kg>0)qty=Math.round(kant.kg/p.kg*1000)/1000}
   var mv=prevM?Object.assign({},prevM):{id:F.id||uid(),ts:F.ts||Date.now(),type:'alim',productId:p.id,from:null,to:S.locations[0].id};
   mv.date=F.date;mv.note=str(F.note);mv.qty=qty;mv.draft=mode==='done'?false:(prevM?!!prevM.draft:true);
+  if(F.evrakManual&&F.evrak)mv.evrak=F.evrak;else delete mv.evrak;
   if(kant)mv.kantar=kant;else delete mv.kantar;
   if(irs)mv.irs=irs;else delete mv.irs;
   mv.tutInfo=inf;
@@ -1299,7 +1343,7 @@ function tutTeslimSave(mode){
   var moves=S.moves.filter(function(x){return x.id!==mv.id}).concat(mv),v=validate(moves);
   if(v)return err(stockErr(v));
   var o=Object.assign({},tutSetOf(p.id));Object.keys(inf).forEach(function(k){if(inf[k])o[k]=inf[k]});
-  S.tutSet=S.tutSet||{};S.tutSet[p.id]=o;
+  o.ts=Date.now();S.tutSet=S.tutSet||{};S.tutSet[p.id]=o;
   S.moves=moves;U.lastType='alim';persist();if(typeof docsSync==='function')setTimeout(docsSync,300);
   if(mode==='print'){
     F.id=mv.id;F.draft=mv.draft;F.ask=false;F.err='';
@@ -1341,14 +1385,26 @@ function tutSnapOf(rec,kind){
   if(kind==='ship')sn=tutShipSnap(rec);
   else{
     var p=P(rec.productId),set=tutSetOf(rec.productId),kt=rec.kantar||null;
-    sn={prod:rec.productId,kind:'teslim',set:set,date:rec.date,unit:p?p.unit:'',qty:rec.qty,kg:kt?kt.kg:kgOf(p,rec.qty),kd:kt?kt.date:rec.date};
+    sn={prod:rec.productId,kind:'teslim',set:set,date:rec.date,evrak:rec.evrak||rec.date,unit:p?p.unit:'',qty:rec.qty,kg:kt?kt.kg:kgOf(p,rec.qty),kd:kt?kt.date:rec.date};
   }
   rec.tut=rec.tut||{};if(!rec.tut.docs)rec.tut.docs=[];rec.tut.snap=sn;persist();
   return sn;
 }
 /* gaz sevkiyatı tutanak verisi: tüp seri no ve tartılan kilo (boş kiloysa boş bırakılır) */
 function tutShipSnap(rec){
-  return {prod:'gaz',kind:rec.dir,set:tutSetOf('gaz'),date:rec.date,n:rec.items.length,tubes:rec.items.map(function(it){var c=S.cyl.find(function(x){return x.id===it.cid});return {serial:c?c.serial:'?',kg:(it.kg==null||isNaN(it.kg))?null:it.kg}})};
+  return {prod:'gaz',kind:rec.dir,set:tutSetOf('gaz'),date:rec.date,evrak:rec.evrak||rec.date,n:rec.items.length,tubes:rec.items.map(function(it){var c=S.cyl.find(function(x){return x.id===it.cid});return {serial:c?c.serial:'?',kg:(it.kg==null||isNaN(it.kg))?null:it.kg}})};
+}
+/* teslim alma tutanağı: her yazdırmada en son girilen tutanak bilgileri ve kayıtlı kantar değerleri */
+function tutMoveSnapFresh(rec){
+  var p=P(rec.productId),kt=rec.kantar||null;
+  var sn={prod:rec.productId,kind:'teslim',set:tutMerge(p,null),date:rec.date,evrak:rec.evrak||rec.date,unit:p?p.unit:'',qty:rec.qty,kg:kt?kt.kg:kgOf(p,rec.qty),kd:kt?kt.date:rec.date};
+  rec.tut=rec.tut||{};if(!rec.tut.docs)rec.tut.docs=[];rec.tut.snap=sn;persist();return sn;
+}
+/* evrak tarihi: elle değiştirilmediyse alım/teslim tarihini izler */
+function tutEvrakSync(el){
+  var F=U.sheet&&U.sheet.f;if(!F||!el||!el.dataset)return;
+  if(el.dataset.f==='evrak')F.evrakManual=true;
+  if(el.dataset.f==='date'&&!F.evrakManual){F.evrak=el.value;var ev=document.querySelector('section.sheet [data-f="evrak"]');if(ev)ev.value=el.value}
 }
 function tutShipSnapFresh(rec){
   rec.tut=rec.tut||{};if(!rec.tut.docs)rec.tut.docs=[];rec.tut.snap=tutShipSnap(rec);persist();return rec.tut.snap;
@@ -1357,7 +1413,7 @@ function tutTubeHtml(sn){
   var rows=Math.max(sn.n||0,sn.tubes.length),h='<table class="tub"><tr><th>Sıra No</th><th>Tank Seri No</th><th>Tartılan Kilo (kg)</th></tr>',tot=0,any=false;
   for(var i=0;i<rows;i++){var t=sn.tubes[i]||{};if(t.kg!=null){tot+=t.kg;any=true}
     h+='<tr><td>'+(i+1)+'</td><td>'+(t.serial?esc(t.serial):'')+'</td><td>'+(t.kg!=null?fmtKg(t.kg):'')+'</td></tr>'}
-  return h+'<tr><td colspan="2"><b>Toplam</b></td><td>'+(any?'<b>'+fmtKg(tot)+'</b>':'')+'</td></tr></table>';
+  return h+'<tr><td colspan="2"><b>Toplam</b></td><td>'+(any&&sn.tubes.length===rows&&sn.tubes.every(function(t){return t.kg!=null})?'<b>'+fmtKg(tot)+'</b>':'')+'</td></tr></table>';
 }
 function tutSigHtml(l,r){
   var L=['Ad Soyad','Unvan','İmza'],R=['Ad Soyad','Tel','Araç Plakası','İmza'];
@@ -1368,7 +1424,7 @@ function tutSigHtml(l,r){
 }
 function tutTitle(sn){
   var what=sn.prod==='gaz'?'Gaz klor '+(sn.kind==='gidis'?'doluma gönderme':'dolumdan geliş'):(sn.set.urun||'')+' teslim alma';
-  return 'Tutanak · '+what+' · '+(sn.set.kisa||'')+' · '+dtr(sn.date);
+  return 'Tutanak · '+what+' · '+(sn.set.kisa||'')+' · '+dtr(sn.evrak||sn.date);
 }
 /* tutanak metni: kaynak docx şablonlarındaki cümle yapısı */
 function tutHtml(sn){
@@ -1390,7 +1446,7 @@ function tutHtml(sn){
   }
   return '<!doctype html><html lang="tr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>'+e(tutTitle(sn))+'</title><style>'+TUT_CSS+'</style></head><body>'+
     '<div class="bar no-print"><button type="button" onclick="window.print()">Yazdır / PDF olarak kaydet</button></div>'+
-    '<div class="page"><h1>TUTANAKTIR</h1>'+p.map(function(t){return '<p>'+t+'</p>'}).join('')+tbl+
+    '<div class="page"><h1>TUTANAKTIR</h1><p class="evrak">Evrak düzenleme tarihi: '+dtr(sn.evrak||sn.date)+'</p>'+p.map(function(t){return '<p>'+t+'</p>'}).join('')+tbl+
     '<p>İş bu tutanak 1 (bir) nüsha olarak hazırlanmış ve imza altına alınmıştır.</p>'+tutSigHtml(sig[0],sig[1])+ek+'</div></body></html>';
 }
 /* tutanak uygulama içinde açılır (önizleme); PDF/yazdırma için ayrı sekme */
@@ -1416,6 +1472,7 @@ var TUT_PRINT_CSS='.tutdoc{font-family:Arial,Helvetica,sans-serif;font-size:12pt
 '.tutdoc table.sig{width:100%;border-collapse:collapse;margin-top:44pt;page-break-inside:avoid}'+
 '.tutdoc table.sig td{width:50%;vertical-align:top;padding:0 10pt 16pt 0;font-size:11pt;color:#000;text-align:left}'+
 '.tutdoc table.sig td b{font-size:12pt}'+
+'.tutdoc .evrak{text-align:right;margin:0 0 12pt;font-size:11pt;color:#000}'+
 '.tutdoc table.tub{width:100%;border-collapse:collapse;margin:14pt 0}.tutdoc table.tub td,.tutdoc table.tub th{border:1px solid #000;padding:4pt 6pt;text-align:center;font-size:11pt;color:#000}'+
 '.tutdoc .fl{margin-top:8pt;color:#000;-webkit-mask-image:none!important;mask-image:none!important}'+
 '.tutdoc .ln{display:inline-block;width:3.2cm;border-bottom:1px solid #000;vertical-align:bottom}'+
@@ -1440,7 +1497,7 @@ function tutPrint(){
 }
 function tutPrintFor(kind,id){
   var rec=tutRecOf(kind,id);if(!rec){toast('Kayıt bulunamadı');return}
-  tutView(kind==='ship'?tutShipSnapFresh(rec):tutSnapOf(rec,kind),U.sheet);
+  tutView(kind==='ship'?tutShipSnapFresh(rec):tutMoveSnapFresh(rec),U.sheet);
 }
 /* belge türü seçimi (teslim alma: dört tür; gaz: yalnız tutanak) */
 function tutRolesFor(kind){return kind==='ship'?[TUT_ROLES[0]]:TUT_ROLES}
@@ -1480,7 +1537,7 @@ function tutSection(r,kind,opt){
 function tutCard(){
   var row=function(k,t){var s=tutSetOf(k);return '<button type="button" class="row" data-a="tutset" data-k="'+k+'"><span class="rt"><b>'+esc(t)+'</b><small>'+esc(s.kisa)+' · İhale '+esc(s.ihale)+'</small></span><span class="link">Düzenle</span></button>'};
   return '<section class="card flush"><div class="hd" style="margin:12px 0 2px">'+secHd('Tutanak bilgileri','doc','var(--accent)')+'</div>'+
-    '<p class="muted" style="font-size:13.5px;margin:0 16px 8px">Yeni tutanaklarda bu bilgiler kullanılır. Bir tutanak oluşturulduktan sonra bilgileri değiştirseniz de o tutanağın metni değişmez. İhale numarası veya firma değişince belgeler Drive’da o ihale için yeni klasöre gider.</p>'+
+    '<p class="muted" style="font-size:13.5px;margin:0 16px 8px">Yeni tutanaklarda bu bilgiler kullanılır. Bilgileri değiştirdiğinizde, tutanak her yazdırıldığında bu son bilgilerle hazırlanır. İhale numarası veya firma değişince belgeler Drive’da o ihale için yeni klasöre gider.</p>'+
     '<div class="list">'+row('gaz','Gaz klor tankları')+row('p2','Rafine Kaya Tuzu')+row('p3','Sülfat')+'</div></section>';
 }
 function openTutSet(key){var s=tutSetOf(key);U.sheet={kind:'tutset',err:'',f:Object.assign({key:key},s)};renderSheet(true)}
@@ -1508,10 +1565,10 @@ function saveTutSet(){
   if(!/^\d{4}-\d{2}-\d{2}$/.test(o.sozlesme))return err('Sözleşme tarihini girin.');
   if(isG){o.tank=v('tank');if(!(parseNum(o.tank)>0))return err('Tüp kapasitesini kg olarak girin.')}
   else{o.urun=v('urun');if(!o.urun)return err('Ürün adını girin.');o.mode=F.mode==='kantar'?'kantar':'yaz';o.kantarAd=v('kantarAd')||'Bolu Belediyesi Kantar Fişi'}
-  S.tutSet=S.tutSet||{};S.tutSet[key]=o;persist();U.sheet=null;renderSheet();render();toast('Tutanak bilgileri kaydedildi');
+  o.ts=Date.now();S.tutSet=S.tutSet||{};S.tutSet[key]=o;persist();U.sheet=null;renderSheet();render();toast('Tutanak bilgileri kaydedildi');
 }
 /* belge adı: "Ürün gün.ay.yıl Tür.uzantı" (ör. "Alüminyum Sülfat 24.11.2026 İrsaliye.jpg") */
-function tutProdName(rec,kind){return kind==='ship'?'Gaz Klor':(tutSetOf(rec.productId).urun||((P(rec.productId)||{}).name)||'Ürün')}
+function tutProdName(rec,kind){if(kind==='ship')return 'Gaz Klor';var sn=rec.tut&&rec.tut.snap,st=(sn&&sn.set&&sn.set.urun)?sn.set:tutSetOf(rec.productId);return st.urun||((P(rec.productId)||{}).name)||'Ürün'}
 function tutNameFor(rec,kind,role,ext){
   var base=tutProdName(rec,kind)+' '+dtr(rec.date)+' '+(TUT_ROLE_NAME[role]||'Tutanak'),used={};
   S.ships.concat(S.moves,S.shipDrafts||[],[rec]).forEach(function(r){((r.tut&&r.tut.docs)||[]).forEach(function(d){used[String(d.name).replace(/\.[^.]+$/,'')]=1})});
@@ -1567,14 +1624,21 @@ function tutDvOpen(el){
 /* Tutanaklar > ürün > "ihale · firma" klasör yolu; eksik klasörler otomatik açılır */
 function tutDir(path){
   return ensureDirs().then(function(){
-    var base=CLOUD.dirs.tut?Promise.resolve(CLOUD.dirs.tut):findOrMakeFolder('Tutanaklar',CLOUD.dirs.root).then(function(id){CLOUD.dirs.tut=id;return id});
+    /* önbellekteki klasör hâlâ geçerli mi: çöpe atılmamış, silinmemiş ve doğru üst klasörde olmalı */
+    var keep=function(key,parent){var c=CLOUD.dirs[key];if(!c)return Promise.resolve(null);
+      return dfetch('https://www.googleapis.com/drive/v3/files/'+c+'?fields=id,trashed,parents').then(function(r){return r.json()}).then(function(j){
+        var okP=!parent||(j.parents||[]).indexOf(parent)>=0;return (j&&j.id&&!j.trashed&&okP)?c:null;
+      }).catch(function(){return null})};
+    var base=keep('tut',CLOUD.dirs.root).then(function(id){if(id)return id;return findOrMakeFolder('Tutanaklar',CLOUD.dirs.root).then(function(nid){CLOUD.dirs.tut=nid;return nid})});
     return base.then(function(root){
       var cur=Promise.resolve(root),acc='';
       (path||[]).filter(Boolean).forEach(function(name){
         acc+='/'+name;var key='tutp:'+acc;
         cur=cur.then(function(parent){
-          if(CLOUD.dirs[key])return CLOUD.dirs[key];
-          return findOrMakeFolder(name,parent).then(function(id){CLOUD.dirs[key]=id;return id});
+          return keep(key,parent).then(function(id){
+            if(id)return id;
+            return findOrMakeFolder(name,parent).then(function(nid){CLOUD.dirs[key]=nid;return nid});
+          });
         });
       });
       return cur;
@@ -1628,7 +1692,7 @@ function movesOf(pid){return S.moves.filter(function(m){return m.productId===pid
 function balances(pid,upTo,exId){
   var b={};S.locations.forEach(function(l){b[l.id]=0});
   movesOf(pid).forEach(function(m){
-    if(m.id===exId)return;if(upTo&&m.date>upTo)return;
+    if(m.id===exId)return;if(upTo&&m.date>upTo)return;if(m.draft)return;
     if(m.from)b[m.from]=(b[m.from]||0)-m.qty;if(m.to)b[m.to]=(b[m.to]||0)+m.qty;
   });
   return b;
@@ -1637,7 +1701,7 @@ function validate(moves){
   var b={};
   var sorted=sortMoves(moves);
   for(var i=0;i<sorted.length;i++){
-    var m=sorted[i],k=m.productId;b[k]=b[k]||{};
+    var m=sorted[i],k=m.productId;b[k]=b[k]||{};if(m.draft)continue;
     if(m.from){b[k][m.from]=(b[k][m.from]||0)-m.qty;if(b[k][m.from]<-1e-9)return {move:m,loc:m.from,bal:b[k][m.from]}}
     if(m.to)b[k][m.to]=(b[k][m.to]||0)+m.qty;
   }
@@ -2497,7 +2561,7 @@ function sheetCyl(s){
 }
 function sheetShip(s){
   var F=s.f,out=s.kind==='gidis',nets=netMap(),taken=shipDraftsTaken(s.id||null);
-  var elig=S.cyl.filter(function(c){return !taken[c.id]&&(out?c.status!=='doluma':c.status==='doluma')});
+  var elig=S.cyl.filter(function(c){return !taken[c.id]&&(out?c.status==='bos':c.status==='doluma')});
   elig.sort(function(a,b){var ra=out&&a.status==='bos'?0:1,rb=out&&b.status==='bos'?0:1;return ra-rb||a.serial.localeCompare(b.serial,'tr',{numeric:true})});
   var rows=elig.map(function(c){
     var on=!!F.sel[c.id],hint='';
@@ -2522,6 +2586,7 @@ function sheetShip(s){
   else if(s.ask)btn='<p style="margin:12px 0 10px">Bu taslak silinsin mi? Tüpler etkilenmez.</p><div class="acts"><button type="button" class="btn" data-a="cancelask">Vazgeç</button><button type="button" class="btn dng" data-a="delship">Evet, sil</button></div>';
   else btn='<div class="acts"><button type="button" class="btn dng" data-a="askdel" style="flex:0 0 auto">Sil</button><button type="button" class="btn" data-a="gshipdraft">Taslak kaydet</button></div><div class="acts" style="margin-top:8px"><button type="button" class="btn" data-a="gshipprint">Tutanağı yazdır</button><button type="submit" class="btn pri">'+(F.ok?'Yine de kaydet':'Kaydet'+(selN?' ('+selN+' tüp)':''))+'</button></div>';
   return sheetFrame(out?'Doluma gönder':'Dolumdan geldi','<form id="sf" novalidate>'+field('Tarih','<input type="date" data-f="date" value="'+esc(F.date)+'" max="'+todayISO()+'">')+
+    field('Evrak düzenleme tarihi','<input type="date" data-f="evrak" value="'+esc(F.evrak||F.date)+'">')+
     '<div class="hd"><span class="lbl">'+(out?'Giden tüpleri seçin, boş halinin toplam kilosunu yazın':'Gelen tüpleri seçin, dolu halinin toplam kilosunu yazın')+'</span></div>'+
     (elig.length?'<div style="margin-bottom:6px"><button type="button" class="link" data-a="selall">'+(out?'Boş olanların hepsini seç':'Hepsini seç')+'</button></div>'+rows:'<div class="empty">'+(out?'Doluma gönderilebilecek tüp yok.':'Doluma giden tüp yok.')+'</div>')+
     '<div style="height:12px"></div>'+info+errBox(s)+tut+btn+'</form>');
@@ -2573,8 +2638,8 @@ function saveCylUse(){
   if(!F.date)return err('Tarihi girin.');
   if(F.date>todayISO())return err('Tarih bugünden ileri olamaz.');
   var sn=function(id){var c=S.cyl.find(function(x){return x.id===id});return c?c.serial:'?'};
-  ins.forEach(function(id){var c=S.cyl.find(function(x){return x.id===id});if(c)c.status='kullanimda'});
-  outs.forEach(function(id){var c=S.cyl.find(function(x){return x.id===id});if(c)c.status='bos'});
+  ins.forEach(function(id){var c=S.cyl.find(function(x){return x.id===id});if(c)setCylSt(c,'kullanimda')});
+  outs.forEach(function(id){var c=S.cyl.find(function(x){return x.id===id});if(c)setCylSt(c,'bos')});
   if(F.rec&&ins.length)S.gazLog.push({id:'g'+uid(),from:F.date,note:'Takılan: '+ins.map(sn).join(', ')+(outs.length?' · Çıkan (boş): '+outs.map(sn).join(', '):''),ins:ins,outs:outs});
   persist();U.sheet=null;renderSheet();render();toast(ins.length+' tüp kullanıma alındı'+(outs.length?', '+outs.length+' tüp boşa geçti':''));
 }
@@ -2878,7 +2943,7 @@ function qeSubmit(){
   }
   var snap=JSON.stringify(S),cnt=f.items.length;
   S.moves=moves;
-  if(ship){S.ships.push(ship);ship.items.forEach(function(it){S.cyl.find(function(c){return c.id===it.cid}).status=ship.dir==='gidis'?'doluma':'dolu'});cnt+=ship.items.length}
+  if(ship){S.ships.push(ship);ship.items.forEach(function(it){setCylSt(S.cyl.find(function(c){return c.id===it.cid}),ship.dir==='gidis'?'doluma':'dolu')});cnt+=ship.items.length}
   persist();U.sheet=null;renderSheet();render();toast(cnt+' kayıt eklendi',snap);
 }
 
@@ -2897,7 +2962,7 @@ function renderSheet(first){
 function closeSheet(){var s=U.sheet;if(s&&(s.kind==='dv'||s.kind==='tutview')&&s.back){U.sheet=s.back;renderSheet();return}U.sheet=null;renderSheet()}
 function err(msg){if(U.sheet)U.sheet.err=msg;var el=$('#f-err');if(el)el.textContent=msg}
 var toastT=null;
-var APP_VER='2026-11-25.11';
+var APP_VER='2026-11-25.17';
 var UNDO=null;
 function selbar(){
   try{
@@ -3014,6 +3079,7 @@ function saveMove(){
   if(!(q>0))return err('Miktarı girin.');
   if(qunit(F,p)&&F.type!=='duzeltme'&&Math.abs(q-Math.round(q))>0.0005&&F.fracKey!==String(q)){F.fracKey=String(q);return err(fmt(kgTyped)+' kg = '+fmt(q)+' '+p.unit+' ediyor, tam sayı değil. Doğruysa Kaydet\'e tekrar basın.')}
   if(!F.date)return err('Tarihi girin.');
+  if(F.date>todayISO())return err('Tarih bugünden ileri olamaz.');
   var kant=null,irs=null,prevM=F.id?S.moves.find(function(x){return x.id===F.id}):null;
   var from=null,to=null,l0=S.locations[0].id;
   if(!p.multi){
@@ -3042,10 +3108,12 @@ function saveMove(){
   if(!F.id&&kant){U.sheet={kind:'minfo',id:mv.id,err:''};renderSheet(true);render();toast('Teslim alma kaydedildi',snap);return}
   U.sheet=null;renderSheet();render();toast(F.id?'Değişiklik kaydedildi':'Kaydedildi',snap);
 }
+function tombAdd(id){if(!id)return;S.tomb=S.tomb||{};S.tomb[id]=Date.now()}
+function setCylSt(c,v){if(!c)return;c.status=v;c.sts=Date.now()}
 function delMove(){
   var F=U.sheet.f,moves=S.moves.filter(function(x){return x.id!==F.id}),v=validate(moves);
   if(v){U.sheet.f.ask=false;renderSheet();return err('Silinemez. '+stockErr(v))}
-  var snap=JSON.stringify(S);S.moves=moves;persist();U.sheet=null;renderSheet();render();toast('Silindi',snap);
+  var snap=JSON.stringify(S);S.moves=moves;tombAdd(F.id);persist();U.sheet=null;renderSheet();render();toast('Silindi',snap);
 }
 function openProduct(id){
   var p=id?P(id):null;
@@ -3106,7 +3174,7 @@ function shipInfoErr(o){
   if(!(parseNum(o.tank)>0))return 'Tüp kapasitesini kg olarak girin.';
   return '';
 }
-function shipInfoSave(o){var n=Object.assign({},tutSetOf('gaz'));Object.keys(o).forEach(function(k){if(o[k])n[k]=o[k]});S.tutSet=S.tutSet||{};S.tutSet.gaz=n}
+function shipInfoSave(o){var n=Object.assign({},tutSetOf('gaz'));Object.keys(o).forEach(function(k){if(o[k])n[k]=o[k]});n.ts=Date.now();S.tutSet=S.tutSet||{};S.tutSet.gaz=n}
 /* başka bir yarım kalan kayıtta seçili tüpler (exId kendi kaydı) */
 function shipDraftsTaken(exId){var o={};(S.shipDrafts||[]).forEach(function(d){if(d.id!==exId)d.items.forEach(function(it){o[it.cid]=true})});return o}
 function gazDraftRows(){
@@ -3116,10 +3184,10 @@ function gazDraftRows(){
     return '<button type="button" class="row t-'+(out?'gidis':'donus')+'" data-a="shipdraft" data-id="'+d.id+'"><span class="badge">'+ic(d.dir)+'</span><span class="rt"><b>Yarım kalan · '+(out?'Doluma gitti':'Dolumdan geldi')+'</b><small>'+esc(dshort(d.date)+' · '+d.items.length+' tüp')+'</small></span><span class="rq"><span class="pill warn">Taslak</span></span></button>';
   }).join('');
 }
-function openShip(kind){U.sheet={kind:kind,err:'',id:null,ask:false,f:Object.assign({date:todayISO(),sel:{},kg:{},ok:false},shipFormInit())};renderSheet(true)}
+function openShip(kind){U.sheet={kind:kind,err:'',id:null,ask:false,f:Object.assign({date:todayISO(),evrak:todayISO(),evrakManual:false,sel:{},kg:{},ok:false},shipFormInit())};renderSheet(true)}
 function openShipDraft(id){
   var d=(S.shipDrafts||[]).find(function(x){return x.id===id});if(!d){toast('Taslak bulunamadı');return}
-  var F=Object.assign({date:d.date,sel:{},kg:{},ok:false},shipFormInit());
+  var F=Object.assign({date:d.date,evrak:d.evrak||d.date,evrakManual:!!d.evrak,sel:{},kg:{},ok:false},shipFormInit());
   d.items.forEach(function(it){F.sel[it.cid]=true;if(it.kg!=null)F.kg[it.cid]=String(it.kg)});
   U.sheet={kind:d.dir,id:d.id,err:'',ask:false,f:F};renderSheet(true);
 }
@@ -3139,6 +3207,7 @@ function shipDraftSave(mode){
   var d=s.id?(S.shipDrafts||[]).find(function(x){return x.id===s.id}):null;
   if(!d){d={id:'sd'+uid(),ts:Date.now(),dir:s.kind,date:F.date,items:items,tut:{docs:[]}};S.shipDrafts.push(d);s.id=d.id}
   else{d.date=F.date;d.items=items;if(!d.tut)d.tut={docs:[]};if(!d.tut.docs)d.tut.docs=[]}
+  if(F.evrakManual&&F.evrak)d.evrak=F.evrak;else delete d.evrak;
   if(mode==='print'){
     d.tut.snap=tutShipSnap(d);persist();
     tutView(d.tut.snap,s);
@@ -3160,7 +3229,7 @@ function saveShip(){
     var c=S.cyl.find(function(x){return x.id===ids[i]});
     if(!c)return err('Tüp bulunamadı. Sayfayı yenileyip tekrar deneyin.');
     if(taken[c.id])return err(c.serial+' başka bir yarım kalan kayıtta. Önce o kaydı tamamlayın ya da tüpü çıkarın.');
-    if(out?c.status==='doluma':c.status!=='doluma')return err(c.serial+' şu an bu işleme uygun değil ('+ST[c.status]+').');
+    if(out?c.status!=='bos':c.status!=='doluma')return err(c.serial+' şu an bu işleme uygun değil ('+ST[c.status]+').');
     var kg=parseNum(F.kg[ids[i]]);
     if(!(kg>0))return err(c.serial+' için kiloyu girin.');
     if(!out){var pk=prevOutKg(c.id,F.date);if(pk!=null&&kg<=pk)warn.push(c.serial)}
@@ -3170,20 +3239,21 @@ function saveShip(){
   shipInfoSave(info);
   var dr=s.id?(S.shipDrafts||[]).find(function(x){return x.id===s.id}):null;
   var shN={id:'g'+uid(),ts:dr?dr.ts:Date.now(),dir:out?'gidis':'donus',date:F.date,items:items,tut:dr&&dr.tut?dr.tut:{docs:[]}};
+  if(F.evrakManual&&F.evrak)shN.evrak=F.evrak;
   if(!shN.tut.docs)shN.tut.docs=[];
   shN.tut.snap=tutShipSnap(shN);
-  if(dr)S.shipDrafts=S.shipDrafts.filter(function(x){return x.id!==dr.id});
+  if(dr){S.shipDrafts=S.shipDrafts.filter(function(x){return x.id!==dr.id});tombAdd(dr.id)}
   S.ships.push(shN);
-  items.forEach(function(it){S.cyl.find(function(c){return c.id===it.cid}).status=out?'doluma':'dolu'});
+  items.forEach(function(it){setCylSt(S.cyl.find(function(c){return c.id===it.cid}),out?'doluma':'dolu')});
   persist();U.sheet={kind:'ship',id:shN.id,ask:false};renderSheet(true);render();toast(out?items.length+' tüp doluma gönderildi':items.length+' tüp dolu olarak alındı');
 }
 function delShip(){
   var s=U.sheet;
   var dr=s.id?(S.shipDrafts||[]).find(function(x){return x.id===s.id}):null;
-  if(dr){S.shipDrafts=S.shipDrafts.filter(function(x){return x.id!==dr.id});persist();U.sheet=null;renderSheet();render();toast('Taslak silindi');return}
+  if(dr){S.shipDrafts=S.shipDrafts.filter(function(x){return x.id!==dr.id});tombAdd(dr.id);persist();U.sheet=null;renderSheet();render();toast('Taslak silindi');return}
   var sh=S.ships.find(function(x){return x.id===s.id});if(!sh)return;
-  S.ships=S.ships.filter(function(x){return x.id!==sh.id});
-  sh.items.forEach(function(it){var c=S.cyl.find(function(x){return x.id===it.cid});if(!c)return;if(sh.dir==='gidis'&&c.status==='doluma')c.status='bos';else if(sh.dir==='donus'&&c.status==='dolu')c.status='doluma'});
+  S.ships=S.ships.filter(function(x){return x.id!==sh.id});tombAdd(sh.id);
+  sh.items.forEach(function(it){var c=S.cyl.find(function(x){return x.id===it.cid});if(!c)return;if(sh.dir==='gidis'&&c.status==='doluma')setCylSt(c,'bos');else if(sh.dir==='donus'&&c.status==='dolu')setCylSt(c,'doluma')});
   persist();U.sheet=null;renderSheet();render();toast('Kayıt silindi');
 }
 function copyText(t){
@@ -3244,14 +3314,14 @@ var ACT={
     if(!U.selConf){U.selConf=true;selbar();return}
     var moves=S.moves.filter(function(m){return !U.sel[m.id]}),v=validate(moves);
     if(v){U.selConf=false;selbar();return toast('Silinemedi: '+stockErr(v))}
-    var snap=JSON.stringify(S);S.moves=moves;persist();U.sm=false;U.sel={};U.selConf=false;render();toast(n+' kayıt silindi',snap)},
+    var snap=JSON.stringify(S);S.moves=moves;Object.keys(U.sel).forEach(function(k){tombAdd(k)});persist();U.sm=false;U.sel={};U.selConf=false;render();toast(n+' kayıt silindi',snap)},
   reload:function(){try{location.reload()}catch(e){}},
   undo:function(){if(!UNDO)return;var snap=UNDO;UNDO=null;var t=$('#toast');t.hidden=true;try{S=JSON.parse(snap)}catch(e){return}persist();render();toast('Geri alındı')},
   qset:function(el){var F=U.sheet.f,p=P(F.productId),q=fromUnits(F,p,Number(el.dataset.q));F.qty=String(Math.round(q*100)/100).replace('.',',');renderSheet();updateHint()},
   qu:function(el){var F=U.sheet.f,p=P(F.productId),want=el.dataset.u==='kg'?'kg':'adet';if((F.qu==='kg')===(want==='kg'))return;
     function cv(x){var n=parseNum(x);if(isNaN(n)||!(n>0))return x;n=want==='kg'?n*p.kg:n/p.kg;return String(Math.round(n*100)/100).replace('.',',')}
     F.qty=cv(F.qty);if(F.count)F.count=cv(F.count);F.qu=want;UIP.qu=UIP.qu||{};UIP.qu[p.id]=want;saveUI();renderSheet();updateHint()},
-  dset:function(el){var F=U.sheet.f;F.date=el.dataset.dt;renderSheet()},
+  dset:function(el){var F=U.sheet.f;F.date=el.dataset.dt;if(!F.evrakManual)F.evrak=F.date;renderSheet()},
   qopen:function(el){U.mod=el.dataset.p;var p=P(el.dataset.p);openMove();var F=U.sheet.f;F.productId=p.id;F.type=el.dataset.ty||'kullanim';F.from=S.locations[0].id;F.to=S.locations[0].id;if(el.dataset.q)F.qu='adet';F.qty=el.dataset.q?String(el.dataset.q).replace('.',','):'';if(el.dataset.dt)F.date=el.dataset.dt;renderSheet(true);updateHint();var qi=$('#f-qty');if(qi&&!qi.value)try{qi.focus()}catch(e){}},
   cloudsync:function(){if(!CLOUD.db)return toast('Drive ayarı yapılmamış');if(CLOUD.state==='giris')return cloudConnect();CLOUD.checked=false;CLOUD.busy=false;cloudCheck();toast('Eşitleniyor…')},
   cloudforce:function(){CLOUD.conflict=false;cloudSchedule(0);render();toast('Bu cihazın kayıtları Drive\'a yazılıyor')},
@@ -3266,7 +3336,7 @@ var ACT={
   gview:function(el){U.gv=el.dataset.k;U.limit=60;render()},
   glnew:function(){openGazLog(null)},
   gledit:function(el){openGazLog(el.dataset.id)},
-  delgl:function(){S.gazLog=S.gazLog.filter(function(x){return x.id!==U.sheet.id});persist();U.sheet=null;renderSheet();render();toast('Kayıt silindi')},
+  delgl:function(){S.gazLog=S.gazLog.filter(function(x){return x.id!==U.sheet.id});tombAdd(U.sheet.id);persist();U.sheet=null;renderSheet();render();toast('Kayıt silindi')},
   tab:function(el){U.tab=el.dataset.t;U.limit=60;render();window.scrollTo(0,0)},
   mod:function(el){U.mod=el.dataset.k;U.filter='all';U.cf='all';U.sf='all';U.limit=60;U.r.loc='all';U.r.type='all';U.r.limit=50;render()},
   add:function(){openMove(null)},
@@ -3307,8 +3377,8 @@ var ACT={
   alack:function(el){if(!S.ack)S.ack={};S.ack[el.dataset.k]=Date.now();persist();render();toast('Bildirim onaylandı')},
   alackall:function(){if(!S.ack)S.ack={};activeAlerts().forEach(function(a){S.ack[a.key]=Date.now()});persist();render();toast('Bildirimler onaylandı')},
   cyl:function(el){U.sheet={kind:'cyl',id:el.dataset.id,ask:false};renderSheet(true)},
-  setst:function(el){var c=S.cyl.find(function(x){return x.id===U.sheet.id});if(!c)return;c.status=el.dataset.s;persist();U.sheet=null;renderSheet();render();toast(c.serial+': '+ST[c.status])},
-  delcyl:function(){S.cyl=S.cyl.filter(function(c){return c.id!==U.sheet.id});persist();U.sheet=null;renderSheet();render();toast('Tüp silindi')},
+  setst:function(el){var c=S.cyl.find(function(x){return x.id===U.sheet.id});if(!c)return;setCylSt(c,el.dataset.s);persist();U.sheet=null;renderSheet();render();toast(c.serial+': '+ST[c.status])},
+  delcyl:function(){if((S.shipDrafts||[]).some(function(d){return d.items.some(function(i){return i.cid===U.sheet.id})})){toast('Bu tüp yarım kalan bir sevkiyatta. Önce taslağı düzenleyin.');return}if((S.ships||[]).some(function(x){return x.items.some(function(i){return i.cid===U.sheet.id})})){toast('Bu tüp bir sevkiyat kaydında kullanılmış, silinemez.');return}S.cyl=S.cyl.filter(function(c){return c.id!==U.sheet.id});tombAdd(U.sheet.id);persist();U.sheet=null;renderSheet();render();toast('Tüp silindi')},
   gidis:function(){openShip('gidis')},
   donus:function(){openShip('donus')},
   ship:function(el){U.sheet={kind:'ship',id:el.dataset.id,ask:false};renderSheet(true)},
@@ -3360,7 +3430,7 @@ document.addEventListener('input',function(e){
   if(el.dataset&&el.dataset.s==='q'){U.q=el.value;U.limit=60;var rr=$('#allres');if(rr)rr.innerHTML=allResults();return}
   if(U.sheet&&U.sheet.kind==='qe'&&el.dataset){if(el.dataset.qkg){U.sheet.f.tube.kg[el.dataset.qkg]=el.value;U.sheet.f.ok=false;return}if(el.dataset.qd){U.sheet.f.date=el.value;return}if(el.id==='qe-text'){U.sheet.f.text=el.value;return}}
   if(!U.sheet)return;
-  if(el.dataset&&el.dataset.f&&U.sheet.f){U.sheet.f[el.dataset.f]=el.value;if(el.dataset.f==='qty')updateHint();if(el.dataset.f==='count')applyCount()}
+  if(el.dataset&&el.dataset.f&&U.sheet.f){U.sheet.f[el.dataset.f]=el.value;tutEvrakSync(el);if(el.dataset.f==='qty')updateHint();if(el.dataset.f==='count')applyCount()}
   else if(el.dataset&&el.dataset.kg){U.sheet.f.kg[el.dataset.kg]=el.value}
 });
 document.addEventListener('change',function(e){
@@ -3379,7 +3449,7 @@ document.addEventListener('change',function(e){
   }
   if(el.id==='rLoc'){U.r.loc=el.value;U.r.limit=50;render();return}
   if(!U.sheet||!U.sheet.f)return;
-  if(el.dataset.f){U.sheet.f[el.dataset.f]=el.value;if(U.sheet.kind==='move')updateHint();if((U.sheet.kind==='gidis'||U.sheet.kind==='donus')&&el.dataset.f==='date')renderSheet()}
+  if(el.dataset.f){U.sheet.f[el.dataset.f]=el.value;tutEvrakSync(el);if(U.sheet.kind==='move')updateHint();if((U.sheet.kind==='gidis'||U.sheet.kind==='donus')&&el.dataset.f==='date')renderSheet()}
   else if(el.dataset.chk){U.sheet.f.sel[el.dataset.chk]=el.checked;renderSheet()}
 });
 document.addEventListener('submit',function(e){
@@ -3425,7 +3495,7 @@ else{
     });
   });
 }
-if(typeof window!=='undefined'&&window.__TEST__)window.__TEST__.api={U:U,S:function(){return S},render:render,renderSheet:renderSheet,openMove:openMove,openShip:openShip,openProduct:openProduct,openLoc:openLoc,validate:validate,ACT:ACT,buildCsv:buildCsv,netMap:netMap,saveMove:saveMove,saveShip:saveShip};
+if(typeof window!=='undefined'&&window.__TEST__)window.__TEST__.api={CLOUD:CLOUD,tutDir:tutDir,tutArchiveOf:tutArchiveOf,tutProdName:tutProdName,parseNum:parseNum,tombAdd:tombAdd,mergeData:mergeData,tutMoveSnapFresh:tutMoveSnapFresh,tutTubeHtml:tutTubeHtml,tutFormInit:tutFormInit,U:U,S:function(){return S},render:render,renderSheet:renderSheet,openMove:openMove,openShip:openShip,openProduct:openProduct,openLoc:openLoc,validate:validate,ACT:ACT,buildCsv:buildCsv,netMap:netMap,saveMove:saveMove,saveShip:saveShip};
 })();
 </script>
 
