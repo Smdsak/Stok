@@ -2582,8 +2582,7 @@ function pnGas(){
   if(!S.cyl.length)return h+'<div class="empty">Henüz tüp eklenmedi.</div></section>';
   var outs=pnOut(), lg=pnLastShip('gidis'), ld=pnLastShip('donus'), ls=logStats();
   var oldest=outs.length&&outs[0].date?daysBetween(outs[0].date,todayISO()):null;
-  h+=['kullanimda','yedek'].map(function(k){var a=S.cyl.filter(function(c){return c.status===k});return '<div class="pn-grp"><small>'+ST[k]+' · '+a.length+'</small><div class="pn-chips">'+(a.length?a.map(function(c){return '<button type="button" class="chip" data-a="cyl" data-id="'+c.id+'">'+esc(c.serial)+'</button>'}).join(''):'<span class="muted">Yok</span>')+'</div></div>'}).join('');
-  h+='<p class="cover">Dolu '+cnt.dolu+' · Boş '+cnt.bos+' · Doluma giden '+cnt.doluma+'</p>';
+  h+=['kullanimda','yedek','dolu','bos'].map(function(k){var a=S.cyl.filter(function(c){return c.status===k});return '<div class="pn-grp"><small>'+ST[k]+' · '+a.length+'</small><div class="pn-chips">'+(a.length?a.map(function(c){return '<button type="button" class="chip" data-a="cyl" data-id="'+c.id+'">'+esc(c.serial)+'</button>'}).join(''):'<span class="muted">Yok</span>')+'</div></div>'}).join('');
   if(outs.length){
     var list=outs.slice(0,6).map(function(o){return esc(o.c.serial)+(o.date?' · '+daysBetween(o.date,todayISO())+' gün':'')}).join(', ')+(outs.length>6?' …':'');
     h+='<div class="pn-out"><b>Doluma gitti, dönüş bekleniyor: '+outs.length+' tüp</b><small>'+(oldest!=null?'En eski '+oldest+' gündür. ':'')+list+'</small></div>';
@@ -3116,7 +3115,7 @@ function renderSheet(first){
 function closeSheet(){var s=U.sheet;if(s&&(s.kind==='dv'||s.kind==='tutview')&&s.back){U.sheet=s.back;renderSheet();return}U.sheet=null;renderSheet()}
 function err(msg){if(U.sheet)U.sheet.err=msg;var el=$('#f-err');if(el)el.textContent=msg}
 var toastT=null;
-var APP_VER='2026-11-26.25';
+var APP_VER='2026-11-27.26';
 var UNDO=null;
 function selbar(){
   try{
